@@ -32,4 +32,7 @@ urlpatterns = [
     # Upload history & shipments
     path("uploads/", views.upload_history, name="upload-history"),
     path("shipments/", views.shipment_list, name="shipment-list"),
+
+    # AI Analysis (Gemini)
+    path("ai/analyze/", views.ai_analyze, name="ai-analyze"),
 ]

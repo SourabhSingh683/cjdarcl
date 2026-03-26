@@ -1,5 +1,5 @@
 /**
- * API client for the Logistics Intelligence Dashboard v2.
+ * API client for the Logistics Intelligence Dashboard v3.
  */
 
 const API_BASE = 'http://127.0.0.1:8000/api';
@@ -45,7 +45,7 @@ export const fetchDelayedShipments = (f = {}) => apiFetch(`/kpis/delayed-shipmen
 export const fetchDrilldown = (f = {}) => apiFetch(`/kpis/drilldown/${buildQuery(f)}`);
 export const fetchComparison = (f = {}) => apiFetch(`/kpis/comparison/${buildQuery(f)}`);
 
-// Analytics (NEW)
+// Analytics
 export const fetchRootCause = (f = {}) => apiFetch(`/analysis/root-cause/${buildQuery(f)}`);
 export const fetchRisk = (f = {}) => apiFetch(`/analysis/risk/${buildQuery(f)}`);
 export const fetchShortage = (f = {}) => apiFetch(`/analysis/shortage/${buildQuery(f)}`);
@@ -58,3 +58,12 @@ export const fetchSmartInsights = (f = {}) => apiFetch(`/insights/smart/${buildQ
 // History & Shipments
 export const fetchUploadHistory = () => apiFetch('/uploads/');
 export const fetchShipments = (f = {}) => apiFetch(`/shipments/${buildQuery(f)}`);
+
+// AI Analysis (Gemini)
+export async function fetchAIAnalysis(question = '') {
+  return apiFetch('/ai/analyze/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question }),
+  });
+}

@@ -365,3 +365,19 @@ def shipment_list(request):
     page = paginator.paginate_queryset(qs, request)
     serializer = ShipmentListSerializer(page, many=True)
     return paginator.get_paginated_response(serializer.data)
+
+
+# ═══════════════════════════════════════════════════════════
+# AI ANALYSIS (GEMINI)
+# ═══════════════════════════════════════════════════════════
+
+@api_view(["POST"])
+def ai_analyze(request):
+    """POST /api/ai/analyze/ — Gemini-powered AI analysis."""
+    from .utils.gemini_engine import analyze_with_gemini
+
+    qs = _apply_filters(Shipment.objects.all(), request.data)
+    question = request.data.get("question", None)
+    result = analyze_with_gemini(qs, user_question=question)
+    return Response(result)
+
