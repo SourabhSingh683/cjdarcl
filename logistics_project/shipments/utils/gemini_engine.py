@@ -7,6 +7,7 @@ to Gemini 2.0 Flash for actionable logistics insights.
 
 import json
 import logging
+import os
 from decimal import Decimal
 
 from django.db.models import Count, Sum, Avg, Q
@@ -14,7 +15,7 @@ from django.db.models.functions import Coalesce
 
 logger = logging.getLogger("shipments")
 
-GEMINI_API_KEY = "REDACTED_KEY"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = "gemini-2.0-flash"
 
 SYSTEM_PROMPT = """You are a senior logistics analyst AI for CJ DARCL, one of India's largest logistics companies.
