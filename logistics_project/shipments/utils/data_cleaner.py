@@ -222,11 +222,10 @@ def clean_data(df, mapped, extra_mapped):
     for col in numeric_fields:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    # Dynamic shortage calculation if POD weight exists and shortage is missing
-    if "shortage" in df.columns and "pod_weight" in df.columns and "gross_weight" in df.columns:
-        if (df["shortage"] == 0).all() and (df["pod_weight"] > 0).any():
-            calculated = df["gross_weight"] - df["pod_weight"]
-            df["shortage"] = calculated.clip(lower=0)
+    # User requested: Shortage = Gross Weight - Net Weight
+    if "gross_weight" in df.columns and "net_weight" in df.columns:
+        calculated_shortage = df["gross_weight"] - df["net_weight"]
+        df["shortage"] = calculated_shortage.clip(lower=0)
 
     # --- Revenue: prefer total_amount, fallback to weight × rate ---
     if (df["revenue"] == 0).all():
@@ -282,7 +281,8 @@ def clean_data(df, mapped, extra_mapped):
         df.loc[has_dates, "is_on_time"] = df.loc[has_dates, "delay_days"] <= 0
 
     # --- Derived flags ---
-    df["has_shortage"] = df["shortage"] > 0
+    # Consider it a valid shortage only if > 0.05 MT (50 kg)
+    df["has_shortage"] = df["shortage"] > 0.05
     df["has_penalty"] = df["penalty"] > 0
 
     total_after = len(df)
