@@ -19,89 +19,64 @@ logger = logging.getLogger("shipments")
 # ─── Column Mapping ──────────────────────────────────────────────────────────
 COLUMN_ALIASES = {
     "shipment_id": [
-        "shipment_id", "shipment id", "c/n no.", "c/n no", "cn no",
-        "consignment no", "consignment_no", "lr no", "lr_no",
-        "bill no.", "bill no", "bill_no", "docket no", "docket_no",
+        "cnno", "cn no", "shipment_id", "shipment number", "docket no", 
+        "docket_no", "awb", "lr no", "bill no", "contarct id",
     ],
     "origin": [
-        "origin", "from", "source", "pickup", "pickup_location",
-        "stockyard", "stockyard\n/direct", "stockyard /direct",
+        "origin", "from", "source", "loading station name", "loading state",
+        "pickup", "stockyard", "stockyard/direct",
     ],
     "destination": [
-        "destination", "to", "dest", "delivery_location",
-        "consignee_city", "unloading_point",
+        "destination", "to", "dest", "delivery station name", "un loading state",
+        "delivery_location", "consignee_city", "unloading_point",
     ],
     "dispatch_date": [
-        "dispatch_date", "dispatch date", "c/n\ndate", "c/n date",
-        "cn date", "cn_date", "date", "lr_date", "lr date",
+        "dispatch_date", "dispatch date", "cndate", "cn date", "cncreated date",
+        "lifting end date", "challan date", "lr_date",
     ],
     "delivery_date": [
-        "delivery_date", "delivery date", "delivered_date",
-        "actual_delivery", "pod_date", "pod date",
+        "delivery_date", "delivery date", "poddate", "pod date", "reporting date",
+        "actual_delivery", "delivered_date",
     ],
     "expected_delivery_date": [
-        "expected_delivery_date", "expected delivery date", "edd",
-        "reporting date", "reporting_date",
+        "expected_delivery_date", "expected delivery date", "expected del date", "edd",
     ],
     "vehicle_type": [
-        "vehicle_type", "vehicle type", "material \ntpye",
-        "material \ntype", "material tpye", "material type", "material_type",
+        "vehicle_type", "vehicle type", "darcl truck type", "truck type",
     ],
 }
 
 EXTRA_ALIASES = {
-    "vehicle_no": [
-        "vehicle no", "vehicle_no", "vehicle no.", "truck_no", "truck no",
-    ],
+    "vehicle_no": ["vehicle no", "truck no", "vehilce in cn", "truck_no"],
     "transit_permissible": [
-        "transit time \npermissible (days) :", "transit time permissible (days)",
-        "transit_time_permissible", "tat_days", "sla_days",
-        "transit time permissible", "transit time\npermissible (days) :",
+        "contract transit days", "transit time permissible", "transit time permissible (days)",
+        "tat_days", "sla_days", "transit time permissible (days) :",
     ],
-    "transit_taken": [
-        "transit time \ntaken (days) :", "transit time taken (days)",
-        "transit_time_taken", "transit time taken",
-        "transit time\ntaken (days) :",
-    ],
-    "net_weight": [
-        "net wt.\n(in mt)", "net wt. (in mt)", "net_wt", "net weight",
-        "net wt", "net wt.\n(in mt)",
-    ],
-    "gross_weight": [
-        "gross wt.\n(in mt)", "gross wt. (in mt)", "gross_wt", "gross weight",
-    ],
-    "charge_weight": [
-        "charge wt.\n(in mt)", "charge wt. (in mt)", "charge_wt", "charge weight",
-    ],
-    "shortage": [
-        "shortage (mt)", "shortage", "short",
-    ],
-    "rate_per_mt": [
-        "rate\n(pmt)", "rate (pmt)", "rate", "rate_per_mt",
-    ],
-    "total_amount": [
-        "total\namount", "total amount", "total_amount", "gross amount",
-    ],
-    "freight_deduction": [
-        "less : freight deduction", "less: freight deduction",
-        "freight deduction", "freight_deduction",
-    ],
-    "penalty": [
-        "less : late delivery penalty", "less: late delivery penalty",
-        "late delivery penalty", "penalty", "penalties",
-    ],
-    "amount_receivable": [
-        "amount receivable", "amount_receivable", "net amount",
-    ],
-    "grn_date": [
-        "grn date", "grn_date",
-    ],
-    "invoice_no": [
-        "invoice no.", "invoice no", "invoice_no",
-    ],
-    "delivery_no": [
-        "delivery no.", "delivery no", "delivery_no",
-    ],
+    "transit_taken": ["transit time taken", "transit time taken (days)", "transit time taken (days) :"],
+    "net_weight": ["net wt", "net weight", "charge qunatity", "net wt. (in mt)"],
+    "gross_weight": ["gross wt", "gross weight", "gross wt. (in mt)"],
+    "charge_weight": ["charge qunatity", "charge weight", "charge wt", "charge wt. (in mt)"],
+    "shortage": ["shortage (mt)", "shortage", "short", "shortage/damage/remarks"],
+    "pod_weight": ["pod weight"],
+    "rate_per_mt": ["rate (pmt)", "rate", "rate_per_mt"],
+    "total_amount": ["contracted amt", "total amount", "gross amount", "value of goods"],
+    "freight_deduction": ["freight deduction", "less : freight deduction"],
+    "penalty": ["penalty", "late delivery penalty", "penalties", "less : late delivery penalty"],
+    "amount_receivable": ["amount receivable", "net amount"],
+    "grn_date": ["grn date", "receiving received date"],
+    "revenue": ["cn invoice amount", "revenue", "bill amount"],
+    "total_distance": ["total distance"],
+    "pod_status": ["pod status", "podstatus"],
+    "billing_status": ["billing status"],
+    "invoice_no": ["invoice no.", "invoice no", "invoice_no"],
+    "delivery_no": ["delivery no.", "delivery no", "delivery_no"],
+    "customer_name": ["customer name", "payer", "bill to party"],
+    "transporter_name": ["contract owner", "transporter name", "vendor"],
+    "booking_region": ["cnbooking region", "booking region", "billing region"],
+    "contract_id": ["contract id", "contarct id", "contract number"],
+    "material_type": ["darcl material", "material type", "material tpye", "material"],
+    "consignor_name": ["consignor name", "consignor"],
+    "consignee_name": ["consignee name", "consignee"],
 }
 
 MINIMUM_REQUIRED = {"shipment_id", "dispatch_date"}
@@ -128,13 +103,27 @@ def read_file(file_obj, file_name: str) -> pd.DataFrame:
         raise DataCleaningError(f"Failed to read file: {str(e)}")
     if df.empty:
         raise DataCleaningError("The uploaded file contains no data rows.")
+    
+    # Dynamic header detection: if headers are Unnamed, look for the real header row
+    if any(str(c).startswith("Unnamed:") for c in df.columns[:5]):
+        for i in range(min(5, len(df))):
+            row_values = df.iloc[i].astype(str).str.lower().tolist()
+            # If we find common header keywords in this row, promote it to columns
+            if any(key in " ".join(row_values) for key in ["shipment", "cn no", "cnno", "dispatch", "date", "contract"]):
+                df.columns = df.iloc[i]
+                df = df[i+1:].reset_index(drop=True)
+                # Ensure all column names are strings to avoid dtype issues
+                df.columns = df.columns.astype(str)
+                break
+
     return df
 
 
 def _find_column(df_columns, aliases):
-    col_lower_map = {col.strip().lower().replace("\r", ""): col for col in df_columns}
+    # Removes \n \r and unifies whitespace to 1 space
+    col_lower_map = {" ".join(str(col).strip().lower().replace("\n", "").replace("\r", "").split()): col for col in df_columns}
     for alias in aliases:
-        normalized = alias.strip().lower().replace("\r", "")
+        normalized = " ".join(alias.strip().lower().replace("\n", "").replace("\r", "").split())
         if normalized in col_lower_map:
             return col_lower_map[normalized]
     return None
@@ -182,7 +171,7 @@ def clean_data(df, mapped, extra_mapped):
         "vehicle_no", "transit_permissible", "transit_taken",
         "net_weight", "gross_weight", "charge_weight", "shortage",
         "rate_per_mt", "total_amount", "freight_deduction", "penalty",
-        "amount_receivable",
+        "amount_receivable", "pod_weight", "total_distance", "pod_status", "billing_status"
     ]
     for col in all_fields:
         if col not in df.columns:
@@ -228,10 +217,16 @@ def clean_data(df, mapped, extra_mapped):
     numeric_fields = [
         "revenue", "net_weight", "gross_weight", "charge_weight", "shortage",
         "rate_per_mt", "total_amount", "freight_deduction", "penalty",
-        "amount_receivable", "transit_permissible", "transit_taken",
+        "amount_receivable", "transit_permissible", "transit_taken", "pod_weight", "total_distance"
     ]
     for col in numeric_fields:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    # Dynamic shortage calculation if POD weight exists and shortage is missing
+    if "shortage" in df.columns and "pod_weight" in df.columns and "gross_weight" in df.columns:
+        if (df["shortage"] == 0).all() and (df["pod_weight"] > 0).any():
+            calculated = df["gross_weight"] - df["pod_weight"]
+            df["shortage"] = calculated.clip(lower=0)
 
     # --- Revenue: prefer total_amount, fallback to weight × rate ---
     if (df["revenue"] == 0).all():
@@ -239,6 +234,12 @@ def clean_data(df, mapped, extra_mapped):
             df["revenue"] = df["total_amount"]
         elif (df["net_weight"] > 0).any() and (df["rate_per_mt"] > 0).any():
             df["revenue"] = df["net_weight"] * df["rate_per_mt"]
+
+    # Dynamic penalty calculation if both contracted amount (total_amount) and final invoice (revenue) exist
+    if "penalty" in df.columns and "total_amount" in df.columns and "revenue" in df.columns:
+        if (df["penalty"] == 0).all() and (df["total_amount"] > 0).any() and (df["revenue"] > 0).any():
+            calc_penalties = df["total_amount"] - df["revenue"]
+            df["penalty"] = calc_penalties.clip(lower=0)
 
     # --- Text standardization ---
     for col in ["origin", "destination"]:

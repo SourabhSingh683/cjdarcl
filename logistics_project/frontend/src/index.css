@@ -6,29 +6,29 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
 :root {
-  --bg-primary: #0f1117;
-  --bg-secondary: #1a1d2e;
-  --bg-card: rgba(26, 29, 46, 0.85);
-  --bg-card-hover: rgba(35, 39, 60, 0.9);
-  --bg-glass: rgba(255, 255, 255, 0.04);
-  --bg-sidebar: #141625;
-  --border-glass: rgba(255, 255, 255, 0.08);
-  --border-card: rgba(255, 255, 255, 0.06);
+  --bg-primary: #f8fafc;
+  --bg-secondary: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f1f5f9;
+  --bg-glass: #ffffff;
+  --bg-sidebar: #ffffff;
+  --border-glass: #e2e8f0;
+  --border-card: #e2e8f0;
 
-  --text-primary: #f1f3f9;
-  --text-secondary: #9ca3af;
-  --text-muted: #6b7280;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
 
   --accent-blue: #3b82f6;
-  --accent-blue-glow: rgba(59, 130, 246, 0.25);
+  --accent-blue-glow: rgba(59, 130, 246, 0.15);
   --accent-emerald: #10b981;
-  --accent-emerald-glow: rgba(16, 185, 129, 0.2);
+  --accent-emerald-glow: rgba(16, 185, 129, 0.15);
   --accent-amber: #f59e0b;
-  --accent-amber-glow: rgba(245, 158, 11, 0.2);
+  --accent-amber-glow: rgba(245, 158, 11, 0.15);
   --accent-rose: #f43f5e;
-  --accent-rose-glow: rgba(244, 63, 94, 0.2);
+  --accent-rose-glow: rgba(244, 63, 94, 0.15);
   --accent-violet: #8b5cf6;
-  --accent-violet-glow: rgba(139, 92, 246, 0.2);
+  --accent-violet-glow: rgba(139, 92, 246, 0.15);
   --accent-cyan: #06b6d4;
 
   --gradient-primary: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
@@ -40,9 +40,9 @@
   --radius-lg: 16px;
   --radius-xl: 20px;
 
-  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 10px 25px -3px rgba(0, 0, 0, 0.4), 0 4px 10px -4px rgba(0, 0, 0, 0.3);
-  --shadow-glow-blue: 0 0 20px rgba(59, 130, 246, 0.15);
+  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.03);
+  --shadow-lg: 0 10px 25px -3px rgba(0, 0, 0, 0.05), 0 4px 10px -4px rgba(0, 0, 0, 0.03);
+  --shadow-glow-blue: 0 4px 14px rgba(59, 130, 246, 0.25);
 
   --sidebar-width: 240px;
   --sidebar-collapsed: 68px;
@@ -157,7 +157,7 @@ body {
 }
 
 .nav-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.05);
   color: var(--text-primary);
 }
 
@@ -298,7 +298,7 @@ body {
 .kpi-card.violet::before { background: var(--accent-violet); }
 
 .kpi-card:hover {
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(0, 0, 0, 0.08);
   transform: translateY(-2px);
   box-shadow: var(--shadow-lg);
 }
@@ -461,8 +461,8 @@ body {
 }
 
 .insight-item:hover {
-  border-color: rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.02);
 }
 
 .insight-icon {
@@ -593,7 +593,7 @@ body {
   gap: 0.75rem;
   padding: 1rem 1.5rem;
   border-top: 1px solid var(--border-glass);
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--bg-secondary);
 }
 
 .ai-input {
@@ -695,7 +695,7 @@ body {
 }
 
 .quick-action-card:hover {
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(0, 0, 0, 0.08);
   transform: translateY(-1px);
   box-shadow: var(--shadow);
 }
@@ -833,7 +833,7 @@ body {
 }
 
 .history-table tr:hover td {
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(0, 0, 0, 0.02);
 }
 
 .status-badge {
@@ -928,7 +928,7 @@ body {
 }
 
 .btn-ghost:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.05);
   color: var(--text-primary);
 }
 
@@ -1034,8 +1034,8 @@ body {
 /* ─────── Scrollbar ─────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.15); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.25); }
 
 /* ─────── Responsive ─────── */
 

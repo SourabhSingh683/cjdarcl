@@ -62,6 +62,14 @@ def _apply_filters(qs, params):
         qs = qs.filter(vehicle_type__iexact=vehicle_type)
     if vehicle_no := params.get("vehicle_no"):
         qs = qs.filter(vehicle_no__icontains=vehicle_no)
+    if transporter_name := params.get("transporter_name"):
+        qs = qs.filter(transporter_name__icontains=transporter_name)
+    if booking_region := params.get("booking_region"):
+        qs = qs.filter(booking_region__icontains=booking_region)
+    if material := params.get("material"):
+        qs = qs.filter(material_type__icontains=material)
+    if cnno := params.get("cnno"):
+        qs = qs.filter(shipment_id__icontains=cnno)
     return qs
 
 
@@ -194,6 +202,9 @@ def _bulk_insert_shipments(df, upload_log):
             "penalty", "amount_receivable", "net_weight", "gross_weight",
             "charge_weight", "shortage", "transit_permissible", "transit_taken",
             "delay_days", "is_on_time", "has_shortage", "has_penalty",
+            "total_distance", "pod_status", "billing_status",
+            "customer_name", "transporter_name", "booking_region", "contract_id", "material_type",
+            "consignor_name", "consignee_name",
         ], batch_size=500)
 
 
@@ -231,6 +242,16 @@ def _build_shipment_data(row, route, upload_log):
         "is_on_time": bool(row.get("is_on_time", True)),
         "has_shortage": bool(row.get("has_shortage", False)),
         "has_penalty": bool(row.get("has_penalty", False)),
+        "total_distance": float(row.get("total_distance", 0)) if pd.notna(row.get("total_distance")) else None,
+        "pod_status": str(row.get("pod_status", ""))[:50] if pd.notna(row.get("pod_status")) else "",
+        "billing_status": str(row.get("billing_status", ""))[:50] if pd.notna(row.get("billing_status")) else "",
+        "customer_name": str(row.get("customer_name", ""))[:255] if pd.notna(row.get("customer_name")) else "",
+        "transporter_name": str(row.get("transporter_name", ""))[:255] if pd.notna(row.get("transporter_name")) else "",
+        "booking_region": str(row.get("booking_region", ""))[:100] if pd.notna(row.get("booking_region")) else "",
+        "contract_id": str(row.get("contract_id", ""))[:100] if pd.notna(row.get("contract_id")) else "",
+        "material_type": str(row.get("material_type", ""))[:150] if pd.notna(row.get("material_type")) else "",
+        "consignor_name": str(row.get("consignor_name", ""))[:255] if pd.notna(row.get("consignor_name")) else "",
+        "consignee_name": str(row.get("consignee_name", ""))[:255] if pd.notna(row.get("consignee_name")) else "",
     }
 
 
@@ -356,6 +377,18 @@ def upload_history(request):
     page = paginator.paginate_queryset(uploads, request)
     serializer = UploadLogSerializer(page, many=True)
     return paginator.get_paginated_response(serializer.data)
+
+
+@api_view(["DELETE"])
+def delete_upload(request, upload_id):
+    try:
+        upload = UploadLog.objects.get(id=upload_id)
+        # Delete associated shipments manually because on_delete is SET_NULL
+        Shipment.objects.filter(upload=upload).delete()
+        upload.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    except UploadLog.DoesNotExist:
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
 
 @api_view(["GET"])

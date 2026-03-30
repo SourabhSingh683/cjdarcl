@@ -186,6 +186,26 @@ class Shipment(models.Model):
         help_text="True if penalty > 0",
     )
 
+    # --- Advanced Tracking (SAP Extensions) ---
+    total_distance = models.FloatField(
+        null=True, blank=True, help_text="Total transit distance in km",
+    )
+    pod_status = models.CharField(
+        max_length=50, blank=True, default="", help_text="Status of the Proof of Delivery",
+    )
+    billing_status = models.CharField(
+        max_length=50, blank=True, default="", help_text="Status of the Billing",
+    )
+
+    # --- Domain Entities ---
+    customer_name = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    transporter_name = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    booking_region = models.CharField(max_length=100, blank=True, default="")
+    contract_id = models.CharField(max_length=100, blank=True, default="")
+    material_type = models.CharField(max_length=150, blank=True, default="")
+    consignor_name = models.CharField(max_length=255, blank=True, default="", db_index=True)
+    consignee_name = models.CharField(max_length=255, blank=True, default="", db_index=True)
+
     # --- Timestamps ---
     created_at = models.DateTimeField(auto_now_add=True)
 

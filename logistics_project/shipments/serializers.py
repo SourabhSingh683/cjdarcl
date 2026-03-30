@@ -49,6 +49,7 @@ class ShipmentSerializer(serializers.ModelSerializer):
             "transit_permissible", "transit_taken",
             "delay_days", "is_on_time", "has_shortage", "has_penalty",
             "status", "created_at",
+            "consignor_name", "consignee_name", "customer_name", "transporter_name"
         ]
 
     def get_status(self, obj):
@@ -68,6 +69,7 @@ class ShipmentListSerializer(serializers.ModelSerializer):
             "revenue", "penalty", "shortage",
             "transit_permissible", "transit_taken",
             "delay_days", "is_on_time", "has_shortage", "has_penalty",
+            "consignor_name", "consignee_name", "customer_name", "transporter_name"
         ]
 
 

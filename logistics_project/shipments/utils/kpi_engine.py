@@ -11,7 +11,7 @@ from decimal import Decimal
 
 from django.db.models import (
     Count, Sum, Avg, Q, F, Value, CharField,
-    DecimalField, IntegerField,
+    DecimalField, IntegerField, FloatField
 )
 from django.db.models.functions import (
     TruncDate, TruncWeek, TruncMonth, Coalesce,
@@ -41,11 +41,25 @@ def get_summary_kpis(qs=None):
         total_revenue=Coalesce(Sum("revenue"), Decimal("0"), output_field=DecimalField()),
         avg_revenue=Coalesce(Avg("revenue"), Decimal("0"), output_field=DecimalField()),
         avg_delay=Coalesce(Avg("delay_days", filter=Q(is_on_time=False)), 0, output_field=IntegerField()),
+        total_distance=Coalesce(Sum("total_distance"), 0.0, output_field=FloatField()),
+        completed_pods=Count("id", filter=Q(pod_status__iexact="c")),
     )
 
     total = stats["total"] or 0
     on_time = stats["on_time"] or 0
     delayed = stats["delayed"] or 0
+    completed_pods = stats["completed_pods"] or 0
+
+    # Advanced Data Science Metrics
+    revenue_at_risk = qs.filter(is_on_time=False).aggregate(rev=Sum("revenue"))["rev"] or Decimal("0")
+    
+    delays_list = list(qs.filter(is_on_time=False).values_list("delay_days", flat=True))
+    if delays_list and len(delays_list) > 1:
+        avg_d = sum(delays_list) / len(delays_list)
+        variance = sum((x - avg_d) ** 2 for x in delays_list) / len(delays_list)
+        volatility = round(variance ** 0.5, 2)
+    else:
+        volatility = 0.0
 
     return {
         "total_shipments": total,
@@ -55,7 +69,88 @@ def get_summary_kpis(qs=None):
         "delayed_percentage": round((delayed / total) * 100, 2) if total > 0 else 0.0,
         "total_revenue": float(stats["total_revenue"]),
         "average_revenue": round(float(stats["avg_revenue"]), 2),
-        "average_delay_days": stats["avg_delay"],
+        "average_delay_days": round(float(stats["avg_delay"]), 1),
+        "total_distance": round(float(stats["total_distance"]), 1),
+        "pod_compliance": round((completed_pods / total) * 100, 1) if total > 0 else 0.0,
+        "revenue_at_risk": float(revenue_at_risk),
+        "delay_volatility": volatility,
+    }
+
+
+def get_full_root_cause(qs=None):
+    """
+    Returns detailed breakdown of delays and issues by various dimensions.
+    """
+    if qs is None:
+        qs = Shipment.objects.all()
+
+    # 1. By Route
+    by_route = list(
+        qs.values("route__origin", "route__destination")
+        .annotate(
+            delayed_count=Count("id", filter=Q(is_on_time=False)),
+            avg_delay=Avg("delay_days", filter=Q(is_on_time=False))
+        )
+        .order_by("-delayed_count")[:10]
+    )
+
+    # 2. By Vehicle
+    by_vehicle = list(
+        qs.values("vehicle_type")
+        .annotate(
+            delayed_count=Count("id", filter=Q(is_on_time=False)),
+            avg_delay=Avg("delay_days", filter=Q(is_on_time=False))
+        )
+        .order_by("-delayed_count")[:10]
+    )
+
+    # 3. By Month
+    by_month = list(
+        qs.annotate(month=TruncMonth("dispatch_date"))
+        .values("month")
+        .annotate(
+            delayed_count=Count("id", filter=Q(is_on_time=False)),
+            total_shipments=Count("id")
+        )
+        .order_by("month")
+    )
+
+    # 4. By Transporter / Contractor
+    by_contractor = list(
+        qs.exclude(transporter_name='').values("transporter_name")
+        .annotate(
+            total_shipments=Count("id"),
+            delayed_count=Count("id", filter=Q(is_on_time=False)),
+            avg_delay=Avg("delay_days", filter=Q(is_on_time=False)),
+            shortage_count=Count("id", filter=Q(has_shortage=True)),
+            penalty_count=Count("id", filter=Q(has_penalty=True))
+        )
+        .order_by("-delayed_count")[:10]
+    )
+
+    # Aggregates for shortages/penalties
+    shortage_stats = qs.aggregate(
+        total_shortage=Sum("shortage_mt"),
+        shortage_count=Count("id", filter=Q(has_shortage=True))
+    )
+    penalty_stats = qs.aggregate(
+        total_penalty=Sum("penalty_amount"),
+        penalty_count=Count("id", filter=Q(has_penalty=True))
+    )
+
+    return {
+        "by_route": by_route,
+        "by_vehicle": by_vehicle,
+        "by_month": by_month,
+        "by_contractor": by_contractor,
+        "shortages": {
+            "total_shortage_mt": float(shortage_stats["total_shortage"] or 0),
+            "total_incidents": shortage_stats["shortage_count"] or 0
+        },
+        "penalties": {
+            "total_penalty_amount": float(penalty_stats["total_penalty"] or 0),
+            "total_incidents": penalty_stats["penalty_count"] or 0
+        }
     }
 
 

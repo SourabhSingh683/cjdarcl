@@ -12,6 +12,7 @@ async function apiFetch(path, options = {}) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || body.details || `HTTP ${res.status}`);
     }
+    if (res.status === 204) return null;
     return await res.json();
   } catch (err) {
     if (err.message === 'Failed to fetch') {
@@ -57,6 +58,7 @@ export const fetchSmartInsights = (f = {}) => apiFetch(`/insights/smart/${buildQ
 
 // History & Shipments
 export const fetchUploadHistory = () => apiFetch('/uploads/');
+export const deleteUpload = (id) => apiFetch(`/uploads/${id}/`, { method: 'DELETE' });
 export const fetchShipments = (f = {}) => apiFetch(`/shipments/${buildQuery(f)}`);
 
 // AI Analysis (Gemini)

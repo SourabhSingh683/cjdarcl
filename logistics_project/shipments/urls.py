@@ -31,6 +31,7 @@ urlpatterns = [
 
     # Upload history & shipments
     path("uploads/", views.upload_history, name="upload-history"),
+    path("uploads/<int:upload_id>/", views.delete_upload, name="delete-upload"),
     path("shipments/", views.shipment_list, name="shipment-list"),
 
     # AI Analysis (Gemini)

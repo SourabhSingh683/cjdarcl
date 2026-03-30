@@ -3,7 +3,7 @@ import './index.css';
 import {
   fetchSummary, fetchRevenueTrends, fetchTopRoutes, fetchSmartInsights,
   fetchUploadHistory, fetchRootCause, fetchRisk, fetchComparison,
-  fetchQuality, fetchDrilldown, uploadFile, fetchAIAnalysis,
+  fetchQuality, fetchDrilldown, uploadFile, fetchAIAnalysis, deleteUpload
 } from './api';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -18,8 +18,9 @@ const COLORS = {
 
 const TOOLTIP_STYLE = {
   contentStyle: {
-    background: 'rgba(15, 17, 23, 0.95)', border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: '10px', color: '#f1f3f9', fontSize: '0.82rem', padding: '0.75rem 1rem',
+    background: 'rgba(255, 255, 255, 0.95)', border: '1px solid rgba(0,0,0,0.08)',
+    borderRadius: '8px', color: '#0f172a', fontSize: '0.82rem', padding: '0.75rem 1rem',
+    boxShadow: '0 4px 10px rgba(0,0,0,0.05)'
   },
 };
 
@@ -60,7 +61,7 @@ export default function App() {
   const [drilldownType, setDrilldownType] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [filters, setFilters] = useState({ date_from:'', date_to:'', origin:'', destination:'', vehicle_type:'' });
+  const [filters, setFilters] = useState({ date_from:'', date_to:'', origin:'', destination:'', vehicle_type:'', transporter_name: '', booking_region: '', material: '', cnno: '' });
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const loadDashboard = useCallback(async (f) => {
@@ -93,10 +94,10 @@ export default function App() {
   }, [tab]);
 
   const handleFilter = () => { loadDashboard(filters); if(rootCause) loadAnalytics(filters); };
-  const handleClear = () => {
-    const e = {date_from:'',date_to:'',origin:'',destination:'',vehicle_type:''};
+  const handleClear = useCallback(() => {
+    const e = {date_from:'',date_to:'',origin:'',destination:'',vehicle_type:'', transporter_name: '', booking_region: '', material: '', cnno: ''};
     setFilters(e); loadDashboard(e);
-  };
+  }, []);
 
   const openDrilldown = async (type) => {
     setDrilldownType(type);
@@ -160,10 +161,10 @@ export default function App() {
 
         <main className="main-content">
           {tab==='dashboard' && <DashboardView {...{summary,revenueTrends,topRoutes,insights,comparison,loading,error,filters,setFilters}} onFilter={handleFilter} onClear={handleClear} onDrilldown={openDrilldown} />}
-          {tab==='analytics' && <AnalyticsView rootCause={rootCause} risk={risk} loading={loading} error={error} />}
+          {tab==='analytics' && <AnalyticsView rootCause={rootCause} risk={risk} loading={loading} error={error} summary={summary} />}
           {tab==='ai' && <AICopilotView />}
-          {tab==='upload' && <UploadView onUploadDone={()=>{loadDashboard(filters);setTab('dashboard');}} />}
-          {tab==='history' && <HistoryView uploads={uploads} loading={loading} />}
+          {tab==='upload' && <UploadView onUploadDone={()=>{setRootCause(null);setRisk(null);loadDashboard(filters);setTab('dashboard');}} />}
+          {tab==='history' && <HistoryView uploads={uploads} loading={loading} onRefresh={() => {setRootCause(null);setRisk(null);loadDashboard(filters);}} />}
         </main>
       </div>
 
@@ -192,10 +193,50 @@ function QualityBadge({ score }) {
 // ═══════════════════════════════════════════════════════════
 // Dashboard View
 // ═══════════════════════════════════════════════════════════
+function CompCard({ label, val, change, period, expl }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="kpi-card blue" style={{padding:'1rem', cursor:'pointer'}} onClick={() => setShow(!show)}>
+      <div className="kpi-label" style={{fontSize:'0.62rem', display:'flex', justifyContent:'space-between'}}>
+        <span>vs Last {period}d ⓘ</span>
+      </div>
+      {show && (
+        <div style={{fontSize:'0.7rem', color:'var(--text-muted)', marginBottom:'0.5rem', marginTop:'0.25rem', lineHeight:'1.2', padding:'0.3rem', background:'var(--bg-elevated)', borderRadius:'4px', border:'1px solid var(--border-glass)'}}>
+           {expl}
+        </div>
+      )}
+      <div style={{display:'flex',alignItems:'baseline',gap:'0.5rem', marginTop: show ? '0' : '0.25rem'}}>
+        <span style={{fontSize:'1.2rem',fontWeight:700}}>{val}</span>
+        {change != null && <ChangeArrow value={change} />}
+      </div>
+      <div className="kpi-sub">{label}</div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
 function DashboardView({ summary,revenueTrends,topRoutes,insights,comparison,loading,error,filters,setFilters,onFilter,onClear,onDrilldown }) {
   if (error) return <ErrorState msg={error} onRetry={onFilter} />;
   if (loading) return <Spinner text="Loading command center..." />;
-  if (!summary || summary.total_shipments===0) return <EmptyState />;
+
+  const hasFilters = Object.values(filters).some(v => v !== '');
+
+  if (!summary || summary.total_shipments===0) {
+    if (hasFilters) {
+      return (
+        <>
+          <Filters filters={filters} setFilters={setFilters} onFilter={onFilter} onClear={onClear} />
+          <div className="empty-state" style={{marginTop:'2rem'}}>
+            <div className="empty-icon">🔍</div>
+            <h2>No Matches Found</h2>
+            <p style={{color:'var(--text-muted)'}}>No shipments match your current search criteria.</p>
+            <button className="btn btn-primary" style={{marginTop:'1rem'}} onClick={onClear}>Clear Filters</button>
+          </div>
+        </>
+      );
+    }
+    return <EmptyState />;
+  }
 
   const trendData = revenueTrends.map(i=>({
     date: i.period ? new Date(i.period).toLocaleDateString('en-IN',{month:'short',day:'numeric'}) : '',
@@ -223,18 +264,11 @@ function DashboardView({ summary,revenueTrends,topRoutes,insights,comparison,loa
       {comparison && comparison.recent && comparison.prior && (
         <div className="kpi-grid" style={{marginBottom:'0.75rem'}}>
           {[
-            ['Shipments',comparison.recent.total_shipments,comparison.changes.total_shipments],
-            ['On-Time %',`${comparison.recent.on_time_pct}%`,comparison.changes.on_time_pct],
-            ['Penalties',`₹${comparison.recent.total_penalty.toLocaleString('en-IN')}`,comparison.changes.total_penalty],
-          ].map(([label,val,change])=>(
-            <div key={label} className="kpi-card blue" style={{padding:'1rem'}}>
-              <div className="kpi-label" style={{fontSize:'0.62rem'}}>vs Last {comparison.period_days}d</div>
-              <div style={{display:'flex',alignItems:'baseline',gap:'0.5rem'}}>
-                <span style={{fontSize:'1.2rem',fontWeight:700}}>{val}</span>
-                {change != null && <ChangeArrow value={change} />}
-              </div>
-              <div className="kpi-sub">{label}</div>
-            </div>
+            ['Shipments',comparison.recent.total_shipments,comparison.changes.total_shipments, `Comparing shipment volume in the current period with the preceding ${comparison.period_days} days.`],
+            ['On-Time %',`${comparison.recent.on_time_pct}%`,comparison.changes.on_time_pct, `Comparing the percentage of on-time deliveries with the preceding ${comparison.period_days} days.`],
+            ['Penalties',`₹${comparison.recent.total_penalty.toLocaleString('en-IN')}`,comparison.changes.total_penalty, `Comparing total delay penalties incurred with the preceding ${comparison.period_days} days.`],
+          ].map(([label,val,change,expl])=>(
+            <CompCard key={label} label={label} val={val} change={change} period={comparison.period_days} expl={expl} />
           ))}
         </div>
       )}
@@ -256,9 +290,21 @@ function DashboardView({ summary,revenueTrends,topRoutes,insights,comparison,loa
             status={summary.delayed_count > 0 ? '↘ needs attention' : '✓ all clear'} statusType={summary.delayed_count > 0 ? 'critical' : 'good'} />
         </div>
         <div onClick={()=>onDrilldown('penalty')} style={{cursor:'pointer'}}>
-          <KpiCard icon="💰" label="Total Revenue" value={`₹${Number(summary.total_revenue).toLocaleString('en-IN')}`}
+          <KpiCard icon="💰" label="Total Billed Freight" value={`₹${Number(summary.total_revenue).toLocaleString('en-IN')}`}
             sub={`Avg ₹${Number(summary.average_revenue).toLocaleString('en-IN')}`} color="violet" />
         </div>
+        {summary.total_distance > 0 && (
+          <div style={{cursor:'default'}}>
+            <KpiCard icon="📍" label="Distance Analyzed" value={`${summary.total_distance.toLocaleString('en-IN')} km`}
+              sub="Total fleet transit scope" color="amber" />
+          </div>
+        )}
+        {summary.pod_compliance > 0 && (
+          <div style={{cursor:'default'}}>
+            <KpiCard icon="📄" label="POD Compliance" value={`${summary.pod_compliance}%`}
+              sub="Proof of Delivery completed" color="blue" />
+          </div>
+        )}
       </div>
 
       {/* Charts */}
@@ -267,11 +313,11 @@ function DashboardView({ summary,revenueTrends,topRoutes,insights,comparison,loa
         <div className="chart-card full-width">
           <div className="chart-header">
             <div>
-              <div className="chart-title">📈 Revenue Trends</div>
-              <div className="chart-subtitle">Daily revenue & shipment volume over time</div>
+              <div className="chart-title">📈 Billed Freight Trends</div>
+              <div className="chart-subtitle">Daily freight billed & shipment volume over time</div>
             </div>
             <div className="chart-legend">
-              <div className="legend-item"><div className="legend-dot" style={{background:COLORS.blue}} />Revenue</div>
+              <div className="legend-item"><div className="legend-dot" style={{background:COLORS.blue}} />Freight Value</div>
               <div className="legend-item"><div className="legend-dot" style={{background:COLORS.violet}} />Shipments</div>
             </div>
           </div>
@@ -288,7 +334,7 @@ function DashboardView({ summary,revenueTrends,topRoutes,insights,comparison,loa
               <YAxis stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false}
                 tickFormatter={v=>`₹${(v/1000).toFixed(0)}k`} />
               <Tooltip {...TOOLTIP_STYLE}
-                formatter={(v,name)=>[name==='revenue'?`₹${Number(v).toLocaleString('en-IN')}`:v, name==='revenue'?'Revenue':'Shipments']}
+                formatter={(v,name)=>[name==='revenue'?`₹${Number(v).toLocaleString('en-IN')}`:v, name==='revenue'?'Freight':'Shipments']}
                 labelStyle={{color:'#9ca3af',fontSize:'0.75rem'}} />
               <Area type="monotone" dataKey="revenue" stroke={COLORS.blue} strokeWidth={2.5}
                 fill="url(#gradRevenue)" dot={false} activeDot={{r:5,stroke:COLORS.blue,strokeWidth:2,fill:'#0f1117'}} />
@@ -361,12 +407,9 @@ function DashboardView({ summary,revenueTrends,topRoutes,insights,comparison,loa
     </>
   );
 }
-
-
-// ═══════════════════════════════════════════════════════════
 // Analytics View
 // ═══════════════════════════════════════════════════════════
-function AnalyticsView({ rootCause, risk, loading, error }) {
+function AnalyticsView({ rootCause, risk, loading, error, summary }) {
   if (error) return <ErrorState msg={error} />;
   if (loading || !rootCause) return <Spinner text="Loading deep analytics..." />;
 
@@ -377,7 +420,23 @@ function AnalyticsView({ rootCause, risk, loading, error }) {
   const MONTH_NAMES = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
   return (
-    <>
+    <div className="analytics-view fade-in">
+      
+      {/* 🧠 Predictive Logistics Intelligence Block */}
+      {summary && (
+        <div className="card" style={{padding:'1.5rem', marginBottom:'1.5rem', background:'linear-gradient(135deg, rgba(30,58,138,0.1), rgba(139,92,246,0.1))', border:'1px solid var(--border-glass)'}}>
+          <h3 style={{marginBottom:'1rem', display:'flex', alignItems:'center', gap:'0.5rem', fontSize:'1.1rem'}}>
+            <span style={{fontSize:'1.3rem'}}>🧠</span> Advanced Data Science Intel
+          </h3>
+          <p style={{fontSize:'0.85rem', color:'var(--text-muted)', marginBottom:'1.25rem'}}>Analyst-level macro overview measuring supply chain volatility, SLA leakage, and reliability probability.</p>
+          <div className="kpi-grid">
+            <KpiCard icon="📉" label="System Delay Volatility" value={`±${summary.delay_volatility} Days`} sub="Standard Deviation of Delivery Delays" color="violet" />
+            <KpiCard icon="⚠️" label="Revenue at Risk" value={`₹${Number(summary.revenue_at_risk).toLocaleString('en-IN')}`} sub="Freight Value tied up in active SLA failures" color="rose" />
+            <KpiCard icon="🎯" label="Transit Reliability Index" value={`${summary.on_time_percentage}%`} sub="Current Probability of On-Time SLA Adherence" color="emerald" />
+          </div>
+        </div>
+      )}
+
       {/* Risk Summary */}
       {risk && (
         <div className="kpi-grid" style={{marginBottom:'1.5rem'}}>
@@ -406,15 +465,27 @@ function AnalyticsView({ rootCause, risk, loading, error }) {
           </div>
           <div className="history-table-wrap" style={{maxHeight:'350px',overflowY:'auto'}}>
             <table className="history-table">
-              <thead><tr><th>Route</th><th>Total</th><th>Delayed</th><th>Delay Rate</th><th>Penalty</th><th>Shortage</th><th>Risk</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>Route</th>
+                  <th>Total</th>
+                  <th>Delayed</th>
+                  <th>Delay Rate</th>
+                  {routeRisks.some(r => Number(r.total_penalty) > 0) && <th>Penalty</th>}
+                  <th>Shortage</th>
+                  <th>Risk</th>
+                </tr>
+              </thead>
               <tbody>
                 {routeRisks.map((r,i)=>(
                   <tr key={i}>
-                    <td style={{color:'#f1f3f9',fontWeight:500}}>{r.route__origin} → {r.route__destination}</td>
+                    <td style={{color:'var(--text-primary)',fontWeight:600}}>{r.route__origin} → {r.route__destination}</td>
                     <td>{r.total}</td>
                     <td style={{color:r.delayed>0?COLORS.rose:'inherit',fontWeight:r.delayed>0?600:400}}>{r.delayed}</td>
                     <td style={{fontWeight:600,color:RISK_COLORS[r.risk_level]}}>{r.delay_rate}%</td>
-                    <td>₹{Number(r.total_penalty).toLocaleString('en-IN')}</td>
+                    {routeRisks.some(rt => Number(rt.total_penalty) > 0) && (
+                      <td>₹{Number(r.total_penalty).toLocaleString('en-IN')}</td>
+                    )}
                     <td>{Number(r.total_shortage).toFixed(3)} MT</td>
                     <td><span className={`status-badge ${r.risk_level==='high'?'failed':r.risk_level==='medium'?'partial':'completed'}`}>{r.risk_level}</span></td>
                   </tr>
@@ -465,7 +536,7 @@ function AnalyticsView({ rootCause, risk, loading, error }) {
               <XAxis dataKey="month" stroke="#6b7280" fontSize={12} tickLine={false} axisLine={false} />
               <YAxis stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} />
               <Tooltip {...TOOLTIP_STYLE}
-                formatter={(v,name)=>[v, name==='total'?'Total Shipments':'Delayed']}
+                formatter={(v,name)=>[v, name==='Total'?'Total Shipments':'Delayed']}
                 labelFormatter={l=>`Month: ${l}`} />
               <Bar dataKey="total" fill={COLORS.blue} name="Total" radius={[4,4,0,0]}
                 label={{position:'top',fill:'#6b7280',fontSize:10}} />
@@ -476,6 +547,53 @@ function AnalyticsView({ rootCause, risk, loading, error }) {
           </ResponsiveContainer>
         </div>
       </div>
+
+      {/* Contractor Reliability Matrix */}
+      {rootCause.by_contractor && rootCause.by_contractor.length > 0 && (
+        <div className="chart-card" style={{marginTop:'1.5rem'}}>
+          <div className="chart-header">
+            <div>
+              <div className="chart-title">🚚 Contractor Reliability Matrix</div>
+              <div className="chart-subtitle">Top High-Risk Transporters & Vendors</div>
+            </div>
+          </div>
+          <div className="history-table-wrap">
+            <table className="history-table">
+              <thead>
+                <tr>
+                  <th>Contractor / Transporter</th>
+                  <th>Total Shipments</th>
+                  <th>Delayed</th>
+                  <th>Avg Delay</th>
+                  <th>Reliability</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rootCause.by_contractor.map((c, i) => {
+                  const onTime = c.total_shipments - c.delayed_count;
+                  const reliability = c.total_shipments > 0 ? ((onTime / c.total_shipments) * 100).toFixed(1) : 0;
+                  return (
+                    <tr key={i}>
+                      <td style={{fontWeight:600}}>{c.transporter_name}</td>
+                      <td>{c.total_shipments}</td>
+                      <td style={{color: c.delayed_count > 0 ? COLORS.rose : COLORS.emerald}}>{c.delayed_count}</td>
+                      <td>{c.delayed_count > 0 && c.avg_delay ? `+${c.avg_delay.toFixed(1)}d` : '-'}</td>
+                      <td>
+                        <div style={{display:'flex', alignItems:'center', gap:'0.5rem'}}>
+                          <div style={{width:'60px',height:'6px',background:'rgba(255,255,255,0.1)',borderRadius:'3px'}}>
+                            <div style={{height:'100%',width:`${reliability}%`,background:reliability>85?COLORS.emerald:reliability>60?COLORS.amber:COLORS.rose,borderRadius:'3px'}} />
+                          </div>
+                          <span style={{fontSize:'0.8rem', color:reliability>85?COLORS.emerald:reliability>60?COLORS.amber:COLORS.rose}}>{reliability}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Shortage Summary */}
       {rootCause.shortages && rootCause.shortages.total_shortage_shipments > 0 && (
@@ -493,7 +611,7 @@ function AnalyticsView({ rootCause, risk, loading, error }) {
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -568,6 +686,11 @@ function AICopilotView() {
           <div ref={messagesEndRef} />
         </div>
         <div className="ai-input-bar">
+          {messages.length > 0 && (
+             <button className="btn btn-ghost" title="Start over / view suggestions" onClick={()=>setMessages([])} disabled={loading} style={{padding:'0.7rem 1rem'}}>
+               🔄 New
+             </button>
+          )}
           <input className="ai-input" placeholder="Ask about your logistics data..." value={input}
             onChange={e=>setInput(e.target.value)} onKeyDown={handleKeyDown} disabled={loading} />
           <button className="ai-send-btn" onClick={()=>sendMessage()} disabled={loading || !input.trim()}>
@@ -582,15 +705,21 @@ function AICopilotView() {
 // Simple markdown-ish formatter for AI response
 function FormattedAI({ text }) {
   if (!text) return null;
+  const parseInline = (str) => {
+    const parts = str.split(/(\*\*.*?\*\*)/g);
+    return parts.map((part, idx) => 
+      part.startsWith('**') && part.endsWith('**') ? <strong key={idx}>{part.slice(2, -2)}</strong> : part
+    );
+  };
   const lines = text.split('\n');
   return (
-    <div>
+    <div style={{ lineHeight: '1.5' }}>
       {lines.map((line, i) => {
-        if (line.startsWith('## ')) return <h2 key={i}>{line.replace('## ','')}</h2>;
-        if (line.startsWith('**') && line.endsWith('**')) return <p key={i}><strong>{line.replace(/\*\*/g,'')}</strong></p>;
-        if (line.startsWith('- ') || line.startsWith('* ')) return <div key={i} style={{paddingLeft:'1rem',marginBottom:'0.25rem'}}>• {line.replace(/^[-*]\s/,'')}</div>;
-        if (line.trim() === '') return <br key={i} />;
-        return <p key={i} style={{marginBottom:'0.3rem'}}>{line}</p>;
+        if (line.startsWith('### ')) return <h3 key={i} style={{marginTop:'1rem',marginBottom:'0.4rem',fontSize:'1.05rem',color:'var(--text-primary)'}}>{parseInline(line.replace('### ',''))}</h3>;
+        if (line.startsWith('## ')) return <h2 key={i} style={{marginTop:'1.2rem',marginBottom:'0.5rem',fontSize:'1.15rem',color:'var(--text-primary)'}}>{parseInline(line.replace('## ',''))}</h2>;
+        if (line.startsWith('- ') || line.startsWith('* ')) return <div key={i} style={{paddingLeft:'0.5rem',marginBottom:'0.3rem',display:'flex'}}><span style={{marginRight:'0.5rem',color:'var(--accent-blue)'}}>•</span><span>{parseInline(line.replace(/^[-*]\s/,''))}</span></div>;
+        if (line.trim() === '') return <div key={i} style={{height:'0.5rem'}} />;
+        return <p key={i} style={{marginBottom:'0.4rem'}}>{parseInline(line)}</p>;
       })}
     </div>
   );
@@ -611,17 +740,17 @@ function DrilldownModal({ data, type, onClose }) {
         </div>
         <div className="history-table-wrap">
           <table className="history-table">
-            <thead><tr><th>Shipment ID</th><th>Route</th><th>Date</th><th>Vehicle</th><th>Delay</th><th>Penalty</th><th>Shortage</th><th>Revenue</th></tr></thead>
+            <thead><tr><th>CN No.</th><th>Consignor</th><th>Consignee</th><th>Route</th><th>Date</th><th>Vehicle</th><th>Delay</th><th>Freight Value</th></tr></thead>
             <tbody>
               {data.map((s,i)=>(
                 <tr key={i}>
-                  <td style={{color:'#f1f3f9',fontWeight:500}}>{s.shipment_id}</td>
+                  <td style={{color:'var(--text-primary)',fontWeight:600}}>{s.shipment_id}</td>
+                  <td style={{maxWidth:'150px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={s.consignor_name}>{s.consignor_name || '-'}</td>
+                  <td style={{maxWidth:'150px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={s.consignee_name}>{s.consignee_name || '-'}</td>
                   <td>{s.origin} → {s.destination}</td>
                   <td>{s.dispatch_date}</td>
                   <td>{s.vehicle_no || s.vehicle_type}</td>
                   <td style={{color:s.delay_days>0?COLORS.rose:COLORS.emerald,fontWeight:600}}>{s.delay_days>0?`+${s.delay_days}d`:'On time'}</td>
-                  <td>{Number(s.penalty)>0?`₹${Number(s.penalty).toLocaleString('en-IN')}`:'-'}</td>
-                  <td>{Number(s.shortage)>0?`${Number(s.shortage).toFixed(3)} MT`:'-'}</td>
                   <td>₹{Number(s.revenue).toLocaleString('en-IN')}</td>
                 </tr>
               ))}
@@ -670,7 +799,10 @@ function Filters({ filters, setFilters, onFilter, onClear }) {
       <div className="filter-group"><label className="filter-label">To</label><input type="date" className="filter-input" value={filters.date_to} onChange={e=>setFilters({...filters,date_to:e.target.value})} /></div>
       <div className="filter-group"><label className="filter-label">Origin</label><input type="text" className="filter-input" placeholder="e.g. Base" value={filters.origin} onChange={e=>setFilters({...filters,origin:e.target.value})} /></div>
       <div className="filter-group"><label className="filter-label">Destination</label><input type="text" className="filter-input" placeholder="e.g. Jamshedpur" value={filters.destination} onChange={e=>setFilters({...filters,destination:e.target.value})} /></div>
-      <div className="filter-group"><label className="filter-label">Material</label><input type="text" className="filter-input" placeholder="e.g. sheet" value={filters.vehicle_type} onChange={e=>setFilters({...filters,vehicle_type:e.target.value})} /></div>
+      <div className="filter-group"><label className="filter-label">CN No.</label><input type="text" className="filter-input" placeholder="e.g. JMS123..." value={filters.cnno} onChange={e=>setFilters({...filters,cnno:e.target.value})} /></div>
+      <div className="filter-group"><label className="filter-label">Material</label><input type="text" className="filter-input" placeholder="e.g. sheet" value={filters.material} onChange={e=>setFilters({...filters,material:e.target.value})} /></div>
+      <div className="filter-group"><label className="filter-label">Transporter</label><input type="text" className="filter-input" placeholder="e.g. Transport Co" value={filters.transporter_name} onChange={e=>setFilters({...filters,transporter_name:e.target.value})} /></div>
+      <div className="filter-group"><label className="filter-label">Region</label><input type="text" className="filter-input" placeholder="e.g. North" value={filters.booking_region} onChange={e=>setFilters({...filters,booking_region:e.target.value})} /></div>
       <button className="btn btn-primary" onClick={onFilter}>Apply</button>
       <button className="btn btn-ghost" onClick={onClear}>Clear</button>
     </div>
@@ -752,25 +884,44 @@ function UploadView({ onUploadDone }) {
 // ═══════════════════════════════════════════════════════════
 // History View
 // ═══════════════════════════════════════════════════════════
-function HistoryView({ uploads, loading }) {
-  if (loading) return <Spinner text="Loading upload history..." />;
+function HistoryView({ uploads, loading, onRefresh }) {
+  const [deleting, setDeleting] = useState(null);
+
+  const handleDelete = async (id) => {
+    if(!window.confirm('Are you sure you want to delete this upload? This will also remove all associated shipment records and cannot be undone.')) return;
+    setDeleting(id);
+    try {
+      await deleteUpload(id);
+      onRefresh();
+    } catch (e) {
+      alert(`Failed to delete: ${e.message}`);
+    } finally {
+      setDeleting(null);
+    }
+  };
+
+  if (loading && !deleting) return <Spinner text="Loading upload history..." />;
   if (!uploads?.length) return <div className="empty-state"><div className="empty-state-icon">📋</div><div className="empty-state-title">No Uploads Yet</div><p>Upload your first shipment file to see history here.</p></div>;
 
   return (
     <div className="history-table-wrap">
       <table className="history-table">
-        <thead><tr><th>File</th><th>Status</th><th>Rows</th><th>Processed</th><th>Errors</th><th>Dups</th><th>Quality</th><th>Time</th><th>Uploaded</th></tr></thead>
+        <thead><tr><th>File</th><th>Status</th><th>Rows</th><th>Processed</th><th>Errors</th><th>Dups</th><th>Quality</th><th>Date</th><th>Action</th></tr></thead>
         <tbody>
           {uploads.map(u=>(
             <tr key={u.id}>
-              <td style={{color:'#f1f3f9',fontWeight:500}}>{u.file_name}</td>
+              <td style={{fontWeight:600,color:'var(--text-primary)'}}>{u.file_name}</td>
               <td><span className={`status-badge ${u.status}`}>{u.status}</span></td>
               <td>{u.total_rows}</td><td>{u.processed_rows}</td>
-              <td style={{color:u.error_rows>0?'#f59e0b':'inherit'}}>{u.error_rows}</td>
+              <td style={{color:u.error_rows>0?'#f59e0b':'inherit',fontWeight:u.error_rows>0?600:400}}>{u.error_rows}</td>
               <td>{u.duplicate_rows||0}</td>
               <td>{u.data_quality_score != null ? <QualityBadge score={u.data_quality_score} /> : '-'}</td>
-              <td>{u.duration_display||'—'}</td>
               <td>{new Date(u.uploaded_at).toLocaleString('en-IN')}</td>
+              <td>
+                <button className="btn btn-ghost" title="Delete Upload" style={{padding:'0.4rem 0.6rem',fontSize:'1.1rem'}} onClick={()=>handleDelete(u.id)} disabled={deleting===u.id}>
+                  {deleting===u.id?'⏳':'🗑️'}
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
