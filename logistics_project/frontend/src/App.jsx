@@ -3,7 +3,7 @@ import './index.css';
 import {
   fetchSummary, fetchRevenueTrends, fetchTopRoutes, fetchSmartInsights,
   fetchUploadHistory, fetchRootCause, fetchRisk, fetchComparison,
-  fetchQuality, fetchDrilldown, uploadFile, fetchAIAnalysis, deleteUpload
+  fetchQuality, fetchDrilldown, uploadFile, fetchAIAnalysis, deleteUpload, fetchShipments
 } from './api';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -57,16 +57,19 @@ export default function App() {
   const [risk, setRisk] = useState(null);
   const [comparison, setComparison] = useState(null);
   const [quality, setQuality] = useState(null);
+  const [cnMatches, setCnMatches] = useState([]);
   const [drilldown, setDrilldown] = useState(null);
   const [drilldownType, setDrilldownType] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [logoError, setLogoError] = useState(false);
   const [filters, setFilters] = useState({ date_from: '', date_to: '', origin: '', destination: '', vehicle_type: '', transporter_name: '', booking_region: '', material: '', cnno: '' });
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const loadDashboard = useCallback(async (f) => {
     setLoading(true); setError(null);
     try {
+      const cnno = (f?.cnno || '').trim();
       const [s, t, r, i, u, c, q] = await Promise.all([
         fetchSummary(f), fetchRevenueTrends({ ...f, group_by: 'day' }),
         fetchTopRoutes(f), fetchSmartInsights(f), fetchUploadHistory(),
@@ -75,6 +78,12 @@ export default function App() {
       setSummary(s); setRevenueTrends(t); setTopRoutes(r);
       setInsights(i.insights || []); setUploads(u.results || []);
       setComparison(c); setQuality(q);
+      if (cnno) {
+        const shipmentRes = await fetchShipments({ ...f, page_size: 25 });
+        setCnMatches(shipmentRes.results || []);
+      } else {
+        setCnMatches([]);
+      }
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }, []);
@@ -102,7 +111,7 @@ export default function App() {
   const openDrilldown = async (type) => {
     setDrilldownType(type);
     try {
-      const res = await fetchDrilldown({ ...filters, filter: type });
+      const res = await fetchDrilldown({ ...filters, filter: type, page_size: 5000 });
       setDrilldown(res.results || []);
     } catch { setDrilldown([]); }
   };
@@ -118,10 +127,17 @@ export default function App() {
       {/* Sidebar */}
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-brand">
-          <div className="sidebar-logo">📦</div>
-          <div>
-            <div className="sidebar-title">CJ DARCL</div>
-            <div className="sidebar-subtitle">Intelligence System</div>
+          <div className="sidebar-logo">
+            {logoError ? (
+              <span className="sidebar-logo-fallback">📦</span>
+            ) : (
+              <img
+                src="/manncj.png"
+                alt="CJ DARCL logo"
+                className="sidebar-logo-image"
+                onError={() => setLogoError(true)}
+              />
+            )}
           </div>
         </div>
         <nav className="sidebar-nav">
@@ -160,7 +176,7 @@ export default function App() {
         </header>
 
         <main className="main-content">
-          {tab === 'dashboard' && <DashboardView {...{ summary, revenueTrends, topRoutes, insights, comparison, loading, error, filters, setFilters }} onFilter={handleFilter} onClear={handleClear} onDrilldown={openDrilldown} />}
+          {tab === 'dashboard' && <DashboardView {...{ summary, revenueTrends, topRoutes, insights, comparison, loading, error, filters, setFilters, cnMatches }} onFilter={handleFilter} onClear={handleClear} onDrilldown={openDrilldown} />}
           {tab === 'analytics' && <AnalyticsView rootCause={rootCause} risk={risk} loading={loading} error={error} summary={summary} onDrilldown={openDrilldown} />}
           {tab === 'ai' && <AICopilotView />}
           {tab === 'upload' && <UploadView onUploadDone={() => { setRootCause(null); setRisk(null); loadDashboard(filters); setTab('dashboard'); }} />}
@@ -217,7 +233,7 @@ function CompCard({ label, val, change, period, expl }) {
 }
 
 // ═══════════════════════════════════════════════════════════
-function DashboardView({ summary, revenueTrends, topRoutes, insights, comparison, loading, error, filters, setFilters, onFilter, onClear, onDrilldown }) {
+function DashboardView({ summary, revenueTrends, topRoutes, insights, comparison, loading, error, filters, setFilters, cnMatches, onFilter, onClear, onDrilldown }) {
   if (error) return <ErrorState msg={error} onRetry={onFilter} />;
   if (loading) return <Spinner text="Loading command center..." />;
 
@@ -261,6 +277,52 @@ function DashboardView({ summary, revenueTrends, topRoutes, insights, comparison
   return (
     <>
       <Filters filters={filters} setFilters={setFilters} onFilter={onFilter} onClear={onClear} />
+      {filters.cnno && (
+        <div className="chart-card" style={{ marginBottom: '1rem' }}>
+          <div className="chart-header">
+            <div>
+              <div className="chart-title">🔎 CN Search Details</div>
+              <div className="chart-subtitle">Showing matched shipment records for CN: {filters.cnno}</div>
+            </div>
+          </div>
+          {cnMatches.length > 0 ? (
+            <div className="history-table-wrap">
+              <table className="history-table">
+                <thead>
+                  <tr>
+                    <th>CN No.</th>
+                    <th>Dispatch Date</th>
+                    <th>Delivery Date</th>
+                    <th>Route</th>
+                    <th>Vehicle</th>
+                    <th>Transporter</th>
+                    <th>Status</th>
+                    <th>Freight</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cnMatches.map((s) => (
+                    <tr key={s.id}>
+                      <td style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{s.shipment_id}</td>
+                      <td>{s.dispatch_date || '-'}</td>
+                      <td>{s.delivery_date || '-'}</td>
+                      <td>{s.origin} → {s.destination}</td>
+                      <td>{s.vehicle_no || s.vehicle_type || '-'}</td>
+                      <td>{s.transporter_name || '-'}</td>
+                      <td style={{ color: s.is_on_time ? COLORS.emerald : COLORS.rose, fontWeight: 600 }}>
+                        {s.is_on_time ? 'On Time' : `Delayed ${s.delay_days || 0}d`}
+                      </td>
+                      <td>₹{Number(s.revenue || 0).toLocaleString('en-IN')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No shipment details found for this CN number.</div>
+          )}
+        </div>
+      )}
 
       {/* Period Comparison */}
       {comparison && comparison.recent && comparison.prior && (
@@ -292,8 +354,8 @@ function DashboardView({ summary, revenueTrends, topRoutes, insights, comparison
             status={summary.delayed_count > 0 ? '↘ needs attention' : '✓ all clear'} statusType={summary.delayed_count > 0 ? 'critical' : 'good'} />
         </div>
         <div onClick={() => onDrilldown('penalty')} style={{ cursor: 'pointer' }}>
-          <KpiCard icon="💰" label="Total Billed Freight" value={`₹${Number(summary.total_revenue).toLocaleString('en-IN')}`}
-            sub={`Avg ₹${Number(summary.average_revenue).toLocaleString('en-IN')}`} color="violet" />
+          <KpiCard icon="💰" label="Total Billed Freight" value={`₹${Number(summary.total_revenue).toLocaleString('en-IN', {maximumFractionDigits: 0})}`}
+            sub={`Rev (2.5%): ₹${(Number(summary.total_revenue) * 0.025).toLocaleString('en-IN', {maximumFractionDigits: 0})}`} color="violet" />
         </div>
         {summary.total_distance > 0 && (
           <div style={{ cursor: 'default' }}>
@@ -420,6 +482,20 @@ function AnalyticsView({ rootCause, risk, loading, error, summary, onDrilldown }
   const routeRisks = risk?.route_risks || [];
 
   const MONTH_NAMES = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const routeDelayData = routeAnalysis.slice(0, 8).map((r) => ({
+    name: `${r.route__origin}→${r.route__destination}`.slice(0, 20),
+    delayed: r.delayed,
+    onTime: r.on_time,
+    total: (r.delayed || 0) + (r.on_time || 0),
+  }));
+  const monthlyDelayData = monthAnalysis.map((m) => ({
+    month: MONTH_NAMES[m.month] || m.month,
+    total: m.total,
+    delayed: m.delayed,
+    delayPct: m.total > 0 ? Math.round((m.delayed / m.total) * 100) : 0,
+  }));
+  const isSmallRouteData = routeDelayData.length <= 2;
+  const isSmallMonthData = monthlyDelayData.length <= 2;
 
   return (
     <div className="analytics-view fade-in">
@@ -502,22 +578,35 @@ function AnalyticsView({ rootCause, risk, loading, error, summary, onDrilldown }
           <div className="chart-header">
             <div>
               <div className="chart-title">📊 Route Delay Breakdown</div>
-              <div className="chart-subtitle">On-time vs delayed per route</div>
+              <div className="chart-subtitle">
+                {isSmallRouteData ? 'Compact view for low-volume filtered results' : 'On-time vs delayed per route'}
+              </div>
             </div>
           </div>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={routeAnalysis.slice(0, 8).map(r => ({
-              name: `${r.route__origin}→${r.route__destination}`.slice(0, 20),
-              delayed: r.delayed, onTime: r.on_time,
-            }))} layout="vertical" barCategoryGap="18%">
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-              <XAxis type="number" stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} />
-              <YAxis type="category" dataKey="name" stroke="#6b7280" fontSize={9} width={120} tickLine={false} axisLine={false} />
-              <Tooltip {...TOOLTIP_STYLE} />
-              <Bar dataKey="onTime" stackId="a" fill={COLORS.emerald} name="On Time" />
-              <Bar dataKey="delayed" stackId="a" fill={COLORS.rose} name="Delayed" radius={[0, 4, 4, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          {isSmallRouteData ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={routeDelayData} barCategoryGap="35%">
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <XAxis dataKey="name" stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} />
+                <YAxis stroke="#6b7280" fontSize={11} allowDecimals={false} tickLine={false} axisLine={false} />
+                <Tooltip {...TOOLTIP_STYLE} />
+                <Legend iconType="circle" wrapperStyle={{ fontSize: '0.8rem', color: '#9ca3af' }} />
+                <Bar dataKey="onTime" fill={COLORS.emerald} name="On Time" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="delayed" fill={COLORS.rose} name="Delayed" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={routeDelayData} layout="vertical" barCategoryGap="18%">
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <XAxis type="number" stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} />
+                <YAxis type="category" dataKey="name" stroke="#6b7280" fontSize={9} width={120} tickLine={false} axisLine={false} />
+                <Tooltip {...TOOLTIP_STYLE} />
+                <Bar dataKey="onTime" stackId="a" fill={COLORS.emerald} name="On Time" />
+                <Bar dataKey="delayed" stackId="a" fill={COLORS.rose} name="Delayed" radius={[0, 4, 4, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
         </div>
 
         {/* Monthly Pattern */}
@@ -525,28 +614,48 @@ function AnalyticsView({ rootCause, risk, loading, error, summary, onDrilldown }
           <div className="chart-header">
             <div>
               <div className="chart-title">📅 Monthly Delay Pattern</div>
-              <div className="chart-subtitle">Seasonal trends in delivery delays</div>
+              <div className="chart-subtitle">
+                {isSmallMonthData ? 'Smoothed trend view for low-volume filtered results' : 'Seasonal trends in delivery delays'}
+              </div>
             </div>
           </div>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={monthAnalysis.map(m => ({
-              month: MONTH_NAMES[m.month] || m.month,
-              total: m.total, delayed: m.delayed,
-              delayPct: m.total > 0 ? Math.round((m.delayed / m.total) * 100) : 0,
-            }))} barCategoryGap="25%">
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-              <XAxis dataKey="month" stroke="#6b7280" fontSize={12} tickLine={false} axisLine={false} />
-              <YAxis stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} />
-              <Tooltip {...TOOLTIP_STYLE}
-                formatter={(v, name) => [v, name === 'Total' ? 'Total Shipments' : 'Delayed']}
-                labelFormatter={l => `Month: ${l}`} />
-              <Bar dataKey="total" fill={COLORS.blue} name="Total" radius={[4, 4, 0, 0]}
-                label={{ position: 'top', fill: '#6b7280', fontSize: 10 }} />
-              <Bar dataKey="delayed" fill={COLORS.rose} name="Delayed" radius={[4, 4, 0, 0]}
-                label={{ position: 'top', fill: '#f43f5e', fontSize: 10 }} />
-              <Legend iconType="circle" wrapperStyle={{ fontSize: '0.8rem', color: '#9ca3af' }} />
-            </BarChart>
-          </ResponsiveContainer>
+          {isSmallMonthData ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <AreaChart data={monthlyDelayData}>
+                <defs>
+                  <linearGradient id="gradMonthlyDelayed" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={COLORS.rose} stopOpacity={0.3} />
+                    <stop offset="95%" stopColor={COLORS.rose} stopOpacity={0.04} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <XAxis dataKey="month" stroke="#6b7280" fontSize={12} tickLine={false} axisLine={false} />
+                <YAxis stroke="#6b7280" fontSize={11} allowDecimals={false} tickLine={false} axisLine={false} />
+                <Tooltip {...TOOLTIP_STYLE}
+                  formatter={(v, name) => [v, name === 'delayed' ? 'Delayed' : 'Total Shipments']}
+                  labelFormatter={(l) => `Month: ${l}`} />
+                <Legend iconType="circle" wrapperStyle={{ fontSize: '0.8rem', color: '#9ca3af' }} />
+                <Area type="monotone" dataKey="total" stroke={COLORS.blue} fill="transparent" strokeWidth={2} name="Total Shipments" />
+                <Area type="monotone" dataKey="delayed" stroke={COLORS.rose} fill="url(#gradMonthlyDelayed)" strokeWidth={2} name="Delayed" />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={monthlyDelayData} barCategoryGap="25%">
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <XAxis dataKey="month" stroke="#6b7280" fontSize={12} tickLine={false} axisLine={false} />
+                <YAxis stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} />
+                <Tooltip {...TOOLTIP_STYLE}
+                  formatter={(v, name) => [v, name === 'Total' ? 'Total Shipments' : 'Delayed']}
+                  labelFormatter={l => `Month: ${l}`} />
+                <Bar dataKey="total" fill={COLORS.blue} name="Total" radius={[4, 4, 0, 0]}
+                  label={{ position: 'top', fill: '#6b7280', fontSize: 10 }} />
+                <Bar dataKey="delayed" fill={COLORS.rose} name="Delayed" radius={[4, 4, 0, 0]}
+                  label={{ position: 'top', fill: '#f43f5e', fontSize: 10 }} />
+                <Legend iconType="circle" wrapperStyle={{ fontSize: '0.8rem', color: '#9ca3af' }} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
 
@@ -735,14 +844,28 @@ function DrilldownModal({ data, type, onClose }) {
   const titles = { all: 'All Shipments', delayed: 'Delayed Shipments', on_time: 'On-Time Shipments', shortage: 'Shortage Shipments', penalty: 'Penalized Shipments' };
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-content" onClick={e => e.stopPropagation()}>
+      <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '1400px', width: '95%' }}>
         <div className="modal-header">
-          <h3 className="modal-title">{titles[type] || 'Shipments'}</h3>
+          <h3 className="modal-title">{titles[type] || 'Shipments'} ({data.length})</h3>
           <button className="btn btn-ghost" onClick={onClose}>✕ Close</button>
         </div>
-        <div className="history-table-wrap">
+        <div className="history-table-wrap" style={{ maxHeight: '70vh', overflow: 'auto' }}>
           <table className="history-table">
-            <thead><tr><th>CN No.</th><th>Consignor</th><th>Consignee</th><th>Route</th><th>Date</th><th>Vehicle</th>{type === 'shortage' ? <th>Shortage</th> : <th>Delay</th>}<th>Freight Value</th></tr></thead>
+            <thead>
+              <tr>
+                <th>CN No.</th>
+                <th>Consignor</th>
+                <th>Consignee</th>
+                <th>Route</th>
+                <th>Transporter</th>
+                <th>Dispatch</th>
+                <th>Expected</th>
+                <th>Delivered</th>
+                <th>Vehicle</th>
+                {type === 'shortage' ? <th>Shortage</th> : <th>Delay</th>}
+                <th>Freight Value</th>
+              </tr>
+            </thead>
             <tbody>
               {data.map((s, i) => (
                 <tr key={i}>
@@ -750,7 +873,10 @@ function DrilldownModal({ data, type, onClose }) {
                   <td style={{ maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.consignor_name}>{s.consignor_name || '-'}</td>
                   <td style={{ maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.consignee_name}>{s.consignee_name || '-'}</td>
                   <td>{s.origin} → {s.destination}</td>
+                  <td style={{ maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.transporter_name}>{s.transporter_name || '-'}</td>
                   <td>{s.dispatch_date}</td>
+                  <td>{s.expected_delivery_date || '-'}</td>
+                  <td>{s.delivery_date || '-'}</td>
                   <td>{s.vehicle_no || s.vehicle_type}</td>
                   {type === 'shortage' ? (
                     <td style={{ color: COLORS.amber, fontWeight: 600 }}>{s.shortage ? `${Number(s.shortage).toFixed(3)} MT` : '-'}</td>

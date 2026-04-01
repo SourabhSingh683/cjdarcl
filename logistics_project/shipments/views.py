@@ -76,7 +76,7 @@ def _apply_filters(qs, params):
 class StandardPagination(PageNumberPagination):
     page_size = 50
     page_size_query_param = "page_size"
-    max_page_size = 200
+    max_page_size = 5000
 
 
 # ═══════════════════════════════════════════════════════════
@@ -356,7 +356,7 @@ def kpi_drilldown(request):
 
     paginator = StandardPagination()
     page = paginator.paginate_queryset(qs, request)
-    serializer = ShipmentListSerializer(page, many=True)
+    serializer = ShipmentSerializer(page, many=True)
     return paginator.get_paginated_response(serializer.data)
 
 
