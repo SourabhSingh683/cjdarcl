@@ -228,11 +228,13 @@ def clean_data(df, mapped, extra_mapped):
         df["shortage"] = calculated_shortage.clip(lower=0)
 
     # --- Revenue: prefer total_amount, fallback to weight × rate ---
-    if (df["revenue"] == 0).all():
-        if (df["total_amount"] > 0).any():
-            df["revenue"] = df["total_amount"]
-        elif (df["net_weight"] > 0).any() and (df["rate_per_mt"] > 0).any():
-            df["revenue"] = df["net_weight"] * df["rate_per_mt"]
+    zero_rev = df["revenue"] == 0
+    if zero_rev.any():
+        if "total_amount" in df.columns:
+            df.loc[zero_rev, "revenue"] = df.loc[zero_rev, "total_amount"]
+            zero_rev = df["revenue"] == 0
+        if "net_weight" in df.columns and "rate_per_mt" in df.columns and zero_rev.any():
+            df.loc[zero_rev, "revenue"] = df.loc[zero_rev, "net_weight"] * df.loc[zero_rev, "rate_per_mt"]
 
     # Dynamic penalty calculation if both contracted amount (total_amount) and final invoice (revenue) exist
     if "penalty" in df.columns and "total_amount" in df.columns and "revenue" in df.columns:
