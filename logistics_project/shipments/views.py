@@ -40,6 +40,31 @@ from .utils.analysis_engine import (
 
 logger = logging.getLogger("shipments")
 
+# Role-based filtering helper
+def _filter_by_role(qs, request):
+    """
+    Restrict queryset based on the authenticated user's role.
+      manager  — sees everything
+      driver   — sees only shipments where vehicle_no matches their profile
+      customer — sees only shipments where customer_name matches their customer_id
+      anonymous / no profile — sees nothing (returns empty qs)
+    """
+    user = request.user
+    if not user or not user.is_authenticated:
+        return qs.none()
+    profile = getattr(user, "profile", None)
+    if not profile:
+        return qs.none()
+    if profile.role == "manager":
+        return qs
+    if profile.role == "driver":
+        vehicle = profile.vehicle_no.strip()
+        return qs.filter(vehicle_no__icontains=vehicle) if vehicle else qs.none()
+    if profile.role == "customer":
+        cust = profile.customer_id.strip()
+        return qs.filter(customer_name__icontains=cust) if cust else qs.none()
+    return qs.none()
+
 
 # ─── Helpers ─────────────────────────────────────────────
 
@@ -393,11 +418,116 @@ def delete_upload(request, upload_id):
 
 @api_view(["GET"])
 def shipment_list(request):
-    qs = _apply_filters(Shipment.objects.select_related("route").all(), request.GET)
+    """
+    GET /api/shipments/
+    Role-aware shipment list:
+      - manager  → all shipments
+      - driver   → only shipments matching their vehicle_no
+      - customer → only shipments matching their customer_id
+      - anonymous → all shipments (backward compat for existing dashboard)
+    """
+    qs = _apply_filters(
+        Shipment.objects.select_related("route").all(), request.GET
+    )
+    # Apply role filter only when authenticated
+    if request.user and request.user.is_authenticated:
+        qs = _filter_by_role(qs, request)
+
     paginator = StandardPagination()
     page = paginator.paginate_queryset(qs, request)
     serializer = ShipmentListSerializer(page, many=True)
     return paginator.get_paginated_response(serializer.data)
+
+
+@api_view(["POST"])
+def pod_upload(request, shipment_id):
+    """
+    POST /api/shipments/<shipment_id>/pod/
+    Upload a POD document for a shipment.
+    Only the assigned driver (or a manager) may upload.
+    After upload:
+      - Sets pod_status = "Uploaded"
+      - Fires pod_uploaded signal → notifies all managers
+    """
+    from django.utils import timezone
+    from rest_framework.parsers import MultiPartParser
+    from rest_framework.permissions import IsAuthenticated
+    from accounts.signals import pod_uploaded
+
+    if not request.user or not request.user.is_authenticated:
+        return Response({"error": "Authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
+
+    profile = getattr(request.user, "profile", None)
+    if not profile:
+        return Response({"error": "User profile not found."}, status=status.HTTP_403_FORBIDDEN)
+    if profile.role not in ("driver", "manager"):
+        return Response({"error": "Only drivers and managers can upload POD."}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        shipment = Shipment.objects.get(shipment_id=shipment_id)
+    except Shipment.DoesNotExist:
+        return Response({"error": "Shipment not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    # Drivers may only upload for their own vehicle
+    if profile.role == "driver":
+        vehicle = profile.vehicle_no.strip()
+        if vehicle and vehicle.lower() not in shipment.vehicle_no.lower():
+            return Response(
+                {"error": "You can only upload POD for shipments assigned to your vehicle."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+    pod_file = request.FILES.get("pod_file")
+    if not pod_file:
+        return Response({"error": "No file provided. Use key 'pod_file'."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Persist POD
+    shipment.pod_file = pod_file
+    shipment.pod_uploaded_at = timezone.now()
+    shipment.pod_status = "Uploaded"
+    shipment.assigned_driver = request.user
+    shipment.save(update_fields=["pod_file", "pod_uploaded_at", "pod_status", "assigned_driver"])
+
+    # Fire signal → managers get notified
+    pod_uploaded.send(
+        sender=Shipment,
+        shipment_id=shipment.shipment_id,
+        driver_user=request.user,
+    )
+
+    logger.info(f"POD uploaded by {request.user.username} for shipment {shipment.shipment_id}")
+    return Response(
+        {
+            "message": "POD uploaded successfully.",
+            "shipment_id": shipment.shipment_id,
+            "pod_status": shipment.pod_status,
+            "uploaded_at": shipment.pod_uploaded_at.isoformat(),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["GET"])
+def generate_invoice_view(request, shipment_id):
+    """
+    GET /api/shipments/<shipment_id>/invoice/
+    Stream a professional PDF invoice for the given shipment.
+    Managers and authenticated users may download invoices.
+    """
+    from django.http import HttpResponse
+    from shipments.services.pdf_generator import generate_invoice
+
+    try:
+        pdf_bytes = generate_invoice(shipment_id)
+    except Shipment.DoesNotExist:
+        return Response({"error": "Shipment not found."}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as exc:
+        logger.exception(f"Invoice generation failed for {shipment_id}: {exc}")
+        return Response({"error": "Invoice generation failed.", "details": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    response = HttpResponse(pdf_bytes, content_type="application/pdf")
+    response["Content-Disposition"] = f'attachment; filename="invoice_{shipment_id}.pdf"'
+    return response
 
 
 # ═══════════════════════════════════════════════════════════

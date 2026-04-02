@@ -1,16 +1,34 @@
 /**
- * API client for the Logistics Intelligence Dashboard v3.
+ * api.js  —  CJ Darcl Logistics Intelligence Platform
+ * =====================================================
+ * Centralised API client. Automatically injects JWT Bearer token
+ * from localStorage into authenticated requests.
  */
 
 const API_BASE = 'http://127.0.0.1:8000/api';
 
-async function apiFetch(path, options = {}) {
+// ─── Core fetch wrapper ───────────────────────────────────────────────────────
+async function apiFetch(path, options = {}, authenticated = false) {
   const url = `${API_BASE}${path}`;
+  const headers = { ...(options.headers || {}) };
+
+  if (authenticated) {
+    const token = localStorage.getItem('access_token');
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  // Don't set Content-Type for FormData — browser sets it with boundary
+  if (!(options.body instanceof FormData)) {
+    if (!headers['Content-Type'] && options.body) {
+      headers['Content-Type'] = 'application/json';
+    }
+  }
+
   try {
-    const res = await fetch(url, options);
+    const res = await fetch(url, { ...options, headers });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || body.details || `HTTP ${res.status}`);
+      throw new Error(body.error || body.detail || body.details || `HTTP ${res.status}`);
     }
     if (res.status === 204) return null;
     return await res.json();
@@ -31,41 +49,109 @@ function buildQuery(params = {}) {
   return str ? `?${str}` : '';
 }
 
-// Upload
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+
+export async function authLogin(username, password) {
+  return apiFetch('/auth/login/', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export async function authOTPRequest(phone) {
+  return apiFetch('/auth/otp/request/', {
+    method: 'POST',
+    body: JSON.stringify({ phone }),
+  });
+}
+
+export async function authOTPVerify(phone, otp, extras = {}) {
+  return apiFetch('/auth/otp/verify/', {
+    method: 'POST',
+    body: JSON.stringify({ phone, otp, ...extras }),
+  });
+}
+
+export async function authMe() {
+  return apiFetch('/auth/me/', {}, true);
+}
+
+export function authLogout() {
+  localStorage.removeItem('access_token');
+  localStorage.removeItem('refresh_token');
+}
+
+export async function authRegister(payload) {
+  return apiFetch('/auth/register/', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+export const fetchNotifications = (p = {}) =>
+  apiFetch(`/notifications/${buildQuery(p)}`, {}, true);
+
+export const markNotificationRead = (id) =>
+  apiFetch(`/notifications/${id}/read/`, { method: 'PATCH' }, true);
+
+export const markAllNotificationsRead = () =>
+  apiFetch('/notifications/mark-all-read/', { method: 'POST' }, true);
+
+// ─── Shipments (role-filtered when authenticated) ─────────────────────────────
+
+export const fetchShipments = (f = {}) =>
+  apiFetch(`/shipments/${buildQuery(f)}`, {}, true);
+
+export async function uploadPOD(shipmentId, file) {
+  const formData = new FormData();
+  formData.append('pod_file', file);
+  return apiFetch(`/shipments/${shipmentId}/pod/`, { method: 'POST', body: formData }, true);
+}
+
+export const downloadInvoice = (shipmentId) =>
+  `${API_BASE}/shipments/${shipmentId}/invoice/`;
+
+// ─── Upload ───────────────────────────────────────────────────────────────────
+
 export async function uploadFile(file) {
   const formData = new FormData();
   formData.append('file', file);
   return apiFetch('/upload/', { method: 'POST', body: formData });
 }
 
-// KPIs
-export const fetchSummary = (f = {}) => apiFetch(`/kpis/summary/${buildQuery(f)}`);
-export const fetchRevenueTrends = (f = {}) => apiFetch(`/kpis/revenue-trends/${buildQuery(f)}`);
-export const fetchTopRoutes = (f = {}) => apiFetch(`/kpis/top-routes/${buildQuery(f)}`);
+// ─── KPIs ─────────────────────────────────────────────────────────────────────
+
+export const fetchSummary        = (f = {}) => apiFetch(`/kpis/summary/${buildQuery(f)}`);
+export const fetchRevenueTrends  = (f = {}) => apiFetch(`/kpis/revenue-trends/${buildQuery(f)}`);
+export const fetchTopRoutes      = (f = {}) => apiFetch(`/kpis/top-routes/${buildQuery(f)}`);
 export const fetchDelayedShipments = (f = {}) => apiFetch(`/kpis/delayed-shipments/${buildQuery(f)}`);
-export const fetchDrilldown = (f = {}) => apiFetch(`/kpis/drilldown/${buildQuery(f)}`);
-export const fetchComparison = (f = {}) => apiFetch(`/kpis/comparison/${buildQuery(f)}`);
+export const fetchDrilldown      = (f = {}) => apiFetch(`/kpis/drilldown/${buildQuery(f)}`);
+export const fetchComparison     = (f = {}) => apiFetch(`/kpis/comparison/${buildQuery(f)}`);
 
-// Analytics
-export const fetchRootCause = (f = {}) => apiFetch(`/analysis/root-cause/${buildQuery(f)}`);
-export const fetchRisk = (f = {}) => apiFetch(`/analysis/risk/${buildQuery(f)}`);
-export const fetchShortage = (f = {}) => apiFetch(`/analysis/shortage/${buildQuery(f)}`);
+// ─── Analytics ───────────────────────────────────────────────────────────────
 
-// Quality & Insights
-export const fetchQuality = () => apiFetch('/quality/');
-export const fetchInsights = (f = {}) => apiFetch(`/insights/${buildQuery(f)}`);
+export const fetchRootCause  = (f = {}) => apiFetch(`/analysis/root-cause/${buildQuery(f)}`);
+export const fetchRisk       = (f = {}) => apiFetch(`/analysis/risk/${buildQuery(f)}`);
+export const fetchShortage   = (f = {}) => apiFetch(`/analysis/shortage/${buildQuery(f)}`);
+
+// ─── Quality & Insights ───────────────────────────────────────────────────────
+
+export const fetchQuality       = () => apiFetch('/quality/');
+export const fetchInsights      = (f = {}) => apiFetch(`/insights/${buildQuery(f)}`);
 export const fetchSmartInsights = (f = {}) => apiFetch(`/insights/smart/${buildQuery(f)}`);
 
-// History & Shipments
-export const fetchUploadHistory = () => apiFetch('/uploads/');
-export const deleteUpload = (id) => apiFetch(`/uploads/${id}/`, { method: 'DELETE' });
-export const fetchShipments = (f = {}) => apiFetch(`/shipments/${buildQuery(f)}`);
+// ─── History ─────────────────────────────────────────────────────────────────
 
-// AI Analysis (Gemini)
+export const fetchUploadHistory = () => apiFetch('/uploads/');
+export const deleteUpload       = (id) => apiFetch(`/uploads/${id}/`, { method: 'DELETE' });
+
+// ─── AI Analysis (Gemini) ────────────────────────────────────────────────────
+
 export async function fetchAIAnalysis(question = '') {
   return apiFetch('/ai/analyze/', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ question }),
   });
 }

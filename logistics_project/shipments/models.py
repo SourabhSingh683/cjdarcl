@@ -1,12 +1,14 @@
 """
 Models for the Logistics Intelligence Dashboard.
 
-Four normalized models:
+Normalized models:
   - Route:     Unique origin→destination pairs
   - UploadLog: Tracks every file upload with processing stats + data quality
-  - Shipment:  Core shipment records with financial, weight, transit, and quality fields
+  - Shipment:  Core shipment records with financial, weight, transit, quality,
+               POD upload, and driver assignment fields
 """
 
+from django.contrib.auth.models import User
 from django.db import models
 from django.core.validators import MinValueValidator
 
@@ -195,6 +197,28 @@ class Shipment(models.Model):
     )
     billing_status = models.CharField(
         max_length=50, blank=True, default="", help_text="Status of the Billing",
+    )
+
+    # --- POD Upload (Driver submits proof) ---
+    pod_file = models.FileField(
+        upload_to="pod_uploads/%Y/%m/",
+        null=True, blank=True,
+        help_text="Proof of Delivery document uploaded by driver",
+    )
+    pod_uploaded_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Timestamp when driver uploaded the POD",
+    )
+
+    # --- Driver Assignment ---
+    # Links a registered driver (UserProfile.vehicle_no) to this shipment.
+    # NULL means unassigned / no registered driver for this vehicle.
+    assigned_driver = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="assigned_shipments",
+        help_text="Driver user assigned to deliver this shipment",
     )
 
     # --- Domain Entities ---

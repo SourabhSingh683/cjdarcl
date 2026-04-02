@@ -9,6 +9,11 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line, AreaChart, Area, PieChart, Pie, Cell, Legend,
 } from 'recharts';
+import { useAuth } from './context/AuthContext';
+import LoginPage from './components/LoginPage';
+import DriverPanel from './components/DriverPanel';
+import CustomerPanel from './components/CustomerPanel';
+import NotificationBell from './components/NotificationBell';
 
 // ─── Constants ─────────────────────────────────────────
 const COLORS = {
@@ -44,9 +49,43 @@ const PAGE_META = {
 };
 
 // ═══════════════════════════════════════════════════════════
-// APP
+// APP — Auth-aware router
 // ═══════════════════════════════════════════════════════════
 export default function App() {
+  const { user, loading: authLoading, logout } = useAuth();
+
+  // While verifying stored JWT, show a minimal splash
+  if (authLoading) {
+    return (
+      <div style={{
+        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: '#0F172A', color: '#64748B', fontFamily: 'Inter, sans-serif', fontSize: '1rem',
+      }}>
+        ⏳ Authenticating…
+      </div>
+    );
+  }
+
+  // Not logged in → show login page
+  if (!user) {
+    return <LoginPage onLoginSuccess={() => {}} />;
+  }
+
+  // Logged in as driver → Driver Panel
+  if (user.role === 'driver') return <DriverPanel />;
+
+  // Logged in as customer → Customer Panel
+  if (user.role === 'customer') return <CustomerPanel />;
+
+  // Logged in as manager → Full Intelligence Dashboard
+  return <ManagerDashboard user={user} onLogout={logout} />;
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// MANAGER DASHBOARD (the original full analytics app)
+// ═══════════════════════════════════════════════════════════
+function ManagerDashboard({ user, onLogout }) {
   const [tab, setTab] = useState('dashboard');
   const [summary, setSummary] = useState(null);
   const [revenueTrends, setRevenueTrends] = useState([]);
@@ -121,22 +160,15 @@ export default function App() {
 
   return (
     <div className="app">
-      {/* Sidebar overlay for mobile */}
       <div className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)} />
 
-      {/* Sidebar */}
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-brand">
           <div className="sidebar-logo">
             {logoError ? (
               <span className="sidebar-logo-fallback">📦</span>
             ) : (
-              <img
-                src="/manncj.png"
-                alt="CJ DARCL logo"
-                className="sidebar-logo-image"
-                onError={() => setLogoError(true)}
-              />
+              <img src="/manncj.png" alt="CJ DARCL" className="sidebar-logo-image" onError={() => setLogoError(true)} />
             )}
           </div>
         </div>
@@ -159,7 +191,6 @@ export default function App() {
         )}
       </aside>
 
-      {/* Main */}
       <div className="main-wrapper">
         <header className="header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
@@ -171,7 +202,14 @@ export default function App() {
           </div>
           <div className="header-actions">
             {quality && <QualityBadge score={quality.data_quality_score} />}
+            <NotificationBell />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.3rem 0.7rem', background: 'rgba(13,148,136,0.1)', border: '1px solid rgba(13,148,136,0.3)', borderRadius: '8px' }}>
+              <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>👤</span>
+              <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#e2e8f0' }}>{user?.full_name || user?.username}</span>
+              <span style={{ fontSize: '0.65rem', color: '#0D9488', fontWeight: 700, background: 'rgba(13,148,136,0.15)', padding: '1px 6px', borderRadius: '4px' }}>MANAGER</span>
+            </div>
             <button className="btn btn-ghost" onClick={() => loadDashboard(filters)}>↻ Refresh</button>
+            <button onClick={onLogout} style={{ padding: '0.35rem 0.85rem', background: 'transparent', border: '1px solid #334155', borderRadius: '6px', color: '#64748b', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}>Sign Out</button>
           </div>
         </header>
 

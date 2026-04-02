@@ -34,6 +34,10 @@ urlpatterns = [
     path("uploads/<int:upload_id>/", views.delete_upload, name="delete-upload"),
     path("shipments/", views.shipment_list, name="shipment-list"),
 
+    # POD upload & Invoice generation
+    path("shipments/<str:shipment_id>/pod/", views.pod_upload, name="pod-upload"),
+    path("shipments/<str:shipment_id>/invoice/", views.generate_invoice_view, name="invoice"),
+
     # AI Analysis (Gemini)
     path("ai/analyze/", views.ai_analyze, name="ai-analyze"),
 ]
