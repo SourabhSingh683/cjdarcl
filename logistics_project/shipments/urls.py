@@ -40,4 +40,12 @@ urlpatterns = [
 
     # AI Analysis (Gemini)
     path("ai/analyze/", views.ai_analyze, name="ai-analyze"),
+
+    # ── Driver Panel ──────────────────────────────────────────
+    path("driver/shipments/", views.DriverShipmentListView.as_view(), name="driver-shipments"),
+    path("driver/upload-pod/<int:shipment_id>/", views.UploadPodImagesView.as_view(), name="driver-upload-pod"),
+
+    # ── POD Download + View (Driver + Manager) ──────────────────
+    path("download-pod/<str:shipment_id>/", views.DownloadPodView.as_view(), name="download-pod"),
+    path("view-pod/<str:shipment_id>/", views.ViewPodView.as_view(), name="view-pod"),
 ]

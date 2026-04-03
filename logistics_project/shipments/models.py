@@ -210,6 +210,20 @@ class Shipment(models.Model):
         help_text="Timestamp when driver uploaded the POD",
     )
 
+    # --- POD Images (up to 3 photos from driver) ---
+    pod_image_1 = models.ImageField(
+        upload_to="pod_images/", null=True, blank=True,
+        help_text="POD photo 1 uploaded by driver",
+    )
+    pod_image_2 = models.ImageField(
+        upload_to="pod_images/", null=True, blank=True,
+        help_text="POD photo 2 (optional)",
+    )
+    pod_image_3 = models.ImageField(
+        upload_to="pod_images/", null=True, blank=True,
+        help_text="POD photo 3 (optional)",
+    )
+
     # --- Driver Assignment ---
     # Links a registered driver (UserProfile.vehicle_no) to this shipment.
     # NULL means unassigned / no registered driver for this vehicle.

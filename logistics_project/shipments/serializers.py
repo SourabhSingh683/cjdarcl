@@ -85,3 +85,33 @@ class FileUploadSerializer(serializers.Serializer):
         if value.size > 10 * 1024 * 1024:
             raise serializers.ValidationError("File too large. Maximum size is 10 MB.")
         return value
+
+
+# ─── Driver-specific serializers ─────────────────────────────────────────────
+
+class DriverShipmentSerializer(serializers.ModelSerializer):
+    """Simplified shipment serializer for the driver panel."""
+    origin = serializers.CharField(source="route.origin", read_only=True)
+    destination = serializers.CharField(source="route.destination", read_only=True)
+    pod_image_1 = serializers.ImageField(use_url=True, required=False, allow_null=True)
+    pod_image_2 = serializers.ImageField(use_url=True, required=False, allow_null=True)
+    pod_image_3 = serializers.ImageField(use_url=True, required=False, allow_null=True)
+
+    class Meta:
+        model = Shipment
+        fields = [
+            "id", "shipment_id", "origin", "destination",
+            "vehicle_no", "dispatch_date", "expected_delivery_date",
+            "pod_status", "is_on_time", "delay_days",
+            "pod_image_1", "pod_image_2", "pod_image_3",
+            "pod_uploaded_at", "created_at",
+        ]
+
+
+class PodImageUploadSerializer(serializers.ModelSerializer):
+    """Accepts up to 3 optional POD photos."""
+
+    class Meta:
+        model = Shipment
+        fields = ["pod_image_1", "pod_image_2", "pod_image_3"]
+

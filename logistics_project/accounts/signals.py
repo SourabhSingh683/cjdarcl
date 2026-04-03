@@ -39,10 +39,9 @@ def notify_managers_on_pod_upload(sender, shipment_id, driver_user, **kwargs):
         Notification(
             recipient=manager,
             notif_type="pod_uploaded",
-            title="POD Uploaded",
+            title="POD Submitted",
             message=(
-                f"Driver '{driver_name}' has uploaded Proof of Delivery "
-                f"for shipment {shipment_id}. Please review."
+                f"Driver {driver_name} has submitted POD for CN {shipment_id}"
             ),
             shipment_ref=str(shipment_id),
         )
