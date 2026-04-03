@@ -204,8 +204,8 @@ function ManagerDashboard({ user, onLogout }) {
             {quality && <QualityBadge score={quality.data_quality_score} />}
             <NotificationBell />
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.3rem 0.7rem', background: 'rgba(13,148,136,0.1)', border: '1px solid rgba(13,148,136,0.3)', borderRadius: '8px' }}>
-              <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>👤</span>
-              <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#e2e8f0' }}>{user?.full_name || user?.username}</span>
+              <span style={{ fontSize: '0.75rem', color: '#0D9488' }}>👤</span>
+              <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#1e293b' }}>{user?.full_name || user?.username}</span>
               <span style={{ fontSize: '0.65rem', color: '#0D9488', fontWeight: 700, background: 'rgba(13,148,136,0.15)', padding: '1px 6px', borderRadius: '4px' }}>MANAGER</span>
             </div>
             <button className="btn btn-ghost" onClick={() => loadDashboard(filters)}>↻ Refresh</button>
