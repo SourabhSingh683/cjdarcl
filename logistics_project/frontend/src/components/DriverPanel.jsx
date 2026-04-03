@@ -1,263 +1,351 @@
 /**
- * DriverPanel.jsx  —  Light Theme (matches Manager Dashboard)
+ * DriverPanel.jsx — Hinglish Driver Panel
+ * =========================================
+ * Features:
+ *   • Mera Load — assigned shipments
+ *   • Photo Bhejo — 1-3 POD upload
+ *   • Purana Record — completed + POD preview + Invoice view
+ *   • NotificationBell — alerts from manager
  */
+
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { fetchShipments, uploadPOD, downloadInvoice } from '../api';
+import { fetchDriverShipments, uploadPodImages, viewPod, getInvoiceUrl } from '../api';
 import NotificationBell from './NotificationBell';
 
-// ── Design tokens (light, matches index.css) ─────────────────────────────────
+// ── Status map ────────────────────────────────────────────────────────────────
+const STATUS_MAP = {
+  '':            { label: 'Load Mila',        color: '#3b82f6', bg: '#eff6ff',  icon: '📦' },
+  'assigned':    { label: 'Load Mila',        color: '#3b82f6', bg: '#eff6ff',  icon: '📦' },
+  'in_transit':  { label: 'Raaste Mein',      color: '#f59e0b', bg: '#fffbeb',  icon: '🚚' },
+  'reached':     { label: 'Pahunch Gaya',     color: '#8b5cf6', bg: '#f5f3ff',  icon: '📍' },
+  'Uploaded':    { label: 'Photo Bhej Diya',  color: '#10b981', bg: '#ecfdf5',  icon: '✅' },
+  'pod_uploaded':{ label: 'Photo Bhej Diya',  color: '#10b981', bg: '#ecfdf5',  icon: '✅' },
+};
+function getStatus(s) {
+  if (s.pod_status === 'Uploaded') return STATUS_MAP['Uploaded'];
+  return STATUS_MAP[s.pod_status] || STATUS_MAP['assigned'];
+}
+
+const TABS = [
+  { key: 'active',  label: '📦 Mera Load' },
+  { key: 'history', label: '📋 Purana Record' },
+];
+
 const C = {
-  bg:       '#f8fafc',
-  card:     '#ffffff',
-  border:   '#e2e8f0',
-  text:     '#0f172a',
-  sub:      '#475569',
-  muted:    '#94a3b8',
-  blue:     '#3b82f6',
-  blueGlow: 'rgba(59,130,246,0.12)',
-  green:    '#10b981',
-  greenGlow:'rgba(16,185,129,0.12)',
-  rose:     '#f43f5e',
-  roseGlow: 'rgba(244,63,94,0.12)',
-  amber:    '#f59e0b',
-  amberGlow:'rgba(245,158,11,0.12)',
-  teal:     '#0d9488',
-  tealGlow: 'rgba(13,148,136,0.12)',
-  shadow:   '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)',
-  shadowMd: '0 4px 12px rgba(0,0,0,0.07)',
+  bg:'#f1f5f9', card:'#ffffff', border:'#e2e8f0', text:'#0f172a',
+  sub:'#475569', muted:'#94a3b8', teal:'#0d9488', tealDk:'#0f766e',
+  tealGlow:'rgba(13,148,136,0.12)', green:'#10b981', greenGlow:'rgba(16,185,129,0.12)',
+  amber:'#f59e0b', blue:'#3b82f6', red:'#ef4444',
+  shadow:'0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)',
+  shadowMd:'0 4px 12px rgba(0,0,0,0.08)', shadowLg:'0 10px 25px rgba(0,0,0,0.1)',
 };
 
+// ═══════════════════════════════════════════════════════════════════════════════
 export default function DriverPanel() {
-  const { user, logout }              = useAuth();
-  const [shipments, setShipments]     = useState([]);
-  const [loading, setLoading]         = useState(true);
-  const [error, setError]             = useState(null);
-  const [uploadingId, setUploadingId] = useState(null);
-  const [uploadMsg, setUploadMsg]     = useState({});
-  const [search, setSearch]           = useState('');
+  const { user, logout }               = useAuth();
+  const [shipments, setShipments]      = useState([]);
+  const [loading, setLoading]          = useState(true);
+  const [error, setError]              = useState(null);
+  const [tab, setTab]                  = useState('active');
+  // Upload state
+  const [uploadTarget, setUploadTarget]= useState(null);
+  const [photos, setPhotos]            = useState([null, null, null]);
+  const [previews, setPreviews]        = useState([null, null, null]);
+  const [uploading, setUploading]      = useState(false);
+  const [successMsg, setSuccessMsg]    = useState('');
+  // POD preview state
+  const [podPreview, setPodPreview]    = useState(null);  // { shipment_id, images, ... }
+  const [podLoading, setPodLoading]    = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const res = await fetchShipments({ page_size: 200 });
-      setShipments(res.results || []);
+      const data = await fetchDriverShipments();
+      setShipments(Array.isArray(data) ? data : (data.results || []));
     } catch (e) { setError(e.message); }
     setLoading(false);
   }, []);
-
   useEffect(() => { load(); }, [load]);
 
-  async function handlePODUpload(shipmentId, file) {
-    setUploadingId(shipmentId);
-    setUploadMsg(p => ({ ...p, [shipmentId]: '' }));
+  const active  = shipments.filter(s => s.pod_status !== 'Uploaded');
+  const history = shipments.filter(s => s.pod_status === 'Uploaded');
+  const displayed = tab === 'active' ? active : history;
+
+  // Photo handlers
+  function handlePhotoSelect(i, file) {
+    const np=[...photos], nv=[...previews];
+    np[i]=file; nv[i]=file?URL.createObjectURL(file):null;
+    setPhotos(np); setPreviews(nv);
+  }
+  function clearPhotos() {
+    previews.forEach(p=>p&&URL.revokeObjectURL(p));
+    setPhotos([null,null,null]); setPreviews([null,null,null]);
+  }
+  function openUploadModal(s) { clearPhotos(); setUploadTarget(s); setSuccessMsg(''); }
+  function closeUploadModal() { clearPhotos(); setUploadTarget(null); }
+
+  async function handleSubmit() {
+    if (!uploadTarget) return;
+    if (!photos[0]&&!photos[1]&&!photos[2]) { alert('Kam se kam 1 photo to daalo!'); return; }
+    setUploading(true);
     try {
-      await uploadPOD(shipmentId, file);
-      setUploadMsg(p => ({ ...p, [shipmentId]: '✅ POD uploaded!' }));
+      await uploadPodImages(uploadTarget.id, photos);
+      setSuccessMsg('✅ Photo upload ho gaya! Manager ko notification chala gaya.');
+      closeUploadModal();
       load();
-    } catch (e) {
-      setUploadMsg(p => ({ ...p, [shipmentId]: `❌ ${e.message}` }));
-    }
-    setUploadingId(null);
+      setTimeout(()=>setSuccessMsg(''),5000);
+    } catch(e) { alert('Upload fail: '+(e.message||'Kuch gadbad ho gayi')); }
+    setUploading(false);
   }
 
-  const filtered = shipments.filter(s =>
-    !search ||
-    s.shipment_id?.toLowerCase().includes(search.toLowerCase()) ||
-    s.vehicle_no?.toLowerCase().includes(search.toLowerCase())
-  );
+  // POD Preview — fetch image URLs and show modal
+  async function openPodPreview(shipmentId) {
+    setPodLoading(true);
+    try {
+      const data = await viewPod(shipmentId);
+      setPodPreview(data);
+    } catch(e) { alert('POD load nahi hua: '+e.message); }
+    setPodLoading(false);
+  }
 
-  const stats = {
-    total:   shipments.length,
-    podDone: shipments.filter(s => s.pod_status === 'Uploaded').length,
-    pending: shipments.filter(s => s.pod_status !== 'Uploaded').length,
-    delayed: shipments.filter(s => !s.is_on_time).length,
-  };
+  // Invoice View — open in new tab
+  function openInvoice(shipmentId) {
+    window.open(getInvoiceUrl(shipmentId), '_blank');
+  }
 
+  // ═══════════════════════════════════════════════════════════════════════════
   return (
-    <div style={{ minHeight: '100vh', background: C.bg, fontFamily: "'Inter','Segoe UI',sans-serif" }}>
+    <div style={{ minHeight:'100vh', background:C.bg, fontFamily:"'Inter','Segoe UI',sans-serif" }}>
 
-      {/* ── Header ──────────────────────────────────────────────────────── */}
+      {/* Header */}
       <header style={{
-        background: C.card,
-        borderBottom: `1px solid ${C.border}`,
-        padding: '0.9rem 2rem',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        position: 'sticky', top: 0, zIndex: 100,
-        boxShadow: C.shadow,
+        background:C.card, borderBottom:`1px solid ${C.border}`,
+        padding:'0.9rem 1.25rem', display:'flex', alignItems:'center',
+        justifyContent:'space-between', position:'sticky', top:0, zIndex:100, boxShadow:C.shadow,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          {/* logo */}
+        <div style={{ display:'flex', alignItems:'center', gap:'0.75rem' }}>
           <img src="/manncj.png" alt="CJ Darcl"
-            onError={e => { e.currentTarget.style.display='none'; }}
-            style={{ height: '40px', objectFit: 'contain' }} />
-          <div style={{ width: '1px', height: '32px', background: C.border }} />
+            onError={e=>{e.currentTarget.style.display='none';}}
+            style={{ height:'38px', objectFit:'contain' }} />
+          <div style={{ width:'1px', height:'30px', background:C.border }} />
           <div>
-            <div style={{ fontWeight: 800, fontSize: '1.05rem', color: C.text }}>Driver Panel</div>
-            <div style={{ fontSize: '0.72rem', color: C.muted }}>
-              {user?.full_name || user?.username}
+            <div style={{ fontWeight:900, fontSize:'1.2rem', color:C.text }}>🚚 Driver Panel</div>
+            <div style={{ fontSize:'0.72rem', color:C.muted, fontWeight:500 }}>
+              {user?.full_name||user?.username}
               {user?.profile?.vehicle_no && (
-                <span> · Vehicle: <span style={{ color: C.teal, fontWeight: 700 }}>
-                  {user.profile.vehicle_no}
-                </span></span>
+                <span> · Gaadi: <span style={{color:C.teal,fontWeight:700}}>{user.profile.vehicle_no}</span></span>
               )}
             </div>
           </div>
         </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:'0.6rem' }}>
           <NotificationBell />
-          <RoleBadge color={C.teal} bg={C.tealGlow} label="DRIVER" icon="🚚" />
-          <button id="driver-logout-btn" onClick={logout} style={ghostBtn}>Sign Out</button>
+          <button onClick={logout} style={{
+            padding:'0.45rem 0.9rem', background:'transparent',
+            border:`1px solid ${C.border}`, borderRadius:'7px',
+            color:C.sub, cursor:'pointer', fontSize:'0.78rem', fontWeight:600, fontFamily:'inherit',
+          }}>Bahar Jao</button>
         </div>
       </header>
 
-      {/* ── Page body ───────────────────────────────────────────────────── */}
-      <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '1.75rem 2rem' }}>
+      {/* Body */}
+      <div style={{ maxWidth:'700px', margin:'0 auto', padding:'1.25rem 1rem' }}>
 
-        {/* Stat cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
-          <StatCard icon="📦" label="Total Assigned" value={stats.total}   accent={C.teal}  bg={C.tealGlow} />
-          <StatCard icon="✅" label="POD Uploaded"   value={stats.podDone} accent={C.green} bg={C.greenGlow} />
-          <StatCard icon="⏳" label="POD Pending"    value={stats.pending} accent={C.amber} bg={C.amberGlow} />
-          <StatCard icon="⚠️" label="Delayed"        value={stats.delayed} accent={C.rose}  bg={C.roseGlow}  />
+        {/* Welcome */}
+        <div style={{
+          background:`linear-gradient(135deg, ${C.teal}, ${C.tealDk})`,
+          borderRadius:'14px', padding:'1.3rem 1.5rem', marginBottom:'1.25rem',
+          color:'#fff', boxShadow:`0 4px 14px ${C.teal}35`,
+        }}>
+          <div style={{ fontSize:'1.3rem', fontWeight:900 }}>
+            🙏 Namaste, {user?.full_name||user?.username}!
+          </div>
+          <div style={{ fontSize:'0.85rem', opacity:0.85, marginTop:'0.3rem' }}>
+            Aapke paas <strong>{active.length}</strong> load baaki hai · <strong>{history.length}</strong> deliver ho chuke
+          </div>
         </div>
 
-        {/* Search + refresh */}
-        <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.25rem' }}>
-          <div style={{ position: 'relative', flex: 1 }}>
-            <span style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: C.muted, pointerEvents: 'none' }}>🔍</span>
-            <input
-              placeholder="Search by CN No. or Vehicle No…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              style={{ ...lightInput, paddingLeft: '2.2rem', width: '100%', boxSizing: 'border-box' }}
-            />
-          </div>
-          <button onClick={load} style={outlineBtn(C.teal)}>↻ Refresh</button>
+        {/* Stats */}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'0.75rem', marginBottom:'1.25rem' }}>
+          <MiniStat icon="📦" value={shipments.length} label="Kul Load"  color={C.teal} />
+          <MiniStat icon="⏳" value={active.length}    label="Baaki Hai" color={C.amber} />
+          <MiniStat icon="✅" value={history.length}   label="Ho Gaya"   color={C.green} />
+        </div>
+
+        {/* Success */}
+        {successMsg && (
+          <div style={{
+            background:C.greenGlow, border:`1px solid ${C.green}40`,
+            borderRadius:'10px', padding:'0.85rem 1rem',
+            color:C.green, fontWeight:700, fontSize:'0.9rem',
+            marginBottom:'1rem', textAlign:'center',
+          }}>{successMsg}</div>
+        )}
+
+        {/* Tabs */}
+        <div style={{
+          display:'grid', gridTemplateColumns:'1fr 1fr',
+          background:C.card, borderRadius:'10px', padding:'4px',
+          border:`1px solid ${C.border}`, marginBottom:'1rem', gap:'4px',
+        }}>
+          {TABS.map(t=>(
+            <button key={t.key} onClick={()=>setTab(t.key)} style={{
+              padding:'0.65rem', borderRadius:'8px', border:'none',
+              background:tab===t.key?C.tealGlow:'transparent',
+              color:tab===t.key?C.teal:C.muted,
+              fontWeight:700, fontSize:'0.88rem', cursor:'pointer', fontFamily:'inherit',
+              boxShadow:tab===t.key?`0 0 0 1px ${C.teal}30`:'none',
+            }}>{t.label}</button>
+          ))}
+        </div>
+
+        {/* Refresh */}
+        <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:'0.75rem' }}>
+          <button onClick={load} style={{
+            padding:'0.4rem 0.85rem', background:`${C.teal}10`,
+            border:`1px solid ${C.teal}40`, borderRadius:'7px',
+            color:C.teal, fontWeight:700, cursor:'pointer', fontSize:'0.8rem', fontFamily:'inherit',
+          }}>↻ Dubara Dekho</button>
         </div>
 
         {/* Error */}
         {error && (
-          <div style={{ background: '#FEF2F2', border: `1px solid ${C.rose}30`, borderRadius: '8px', padding: '0.75rem 1rem', color: '#B91C1C', marginBottom: '1rem', fontSize: '0.85rem' }}>
-            ⚠️ {error}
-          </div>
+          <div style={{
+            background:'#FEF2F2', border:`1px solid ${C.red}30`, borderRadius:'10px',
+            padding:'0.75rem 1rem', color:'#B91C1C', fontSize:'0.85rem', marginBottom:'1rem',
+          }}>⚠️ {error}</div>
         )}
 
-        {/* Shipment list */}
+        {/* Loading / Empty / Cards */}
         {loading ? (
-          <LoadingState text="Loading your assigned shipments…" />
-        ) : filtered.length === 0 ? (
-          <EmptyState icon="🚫" title="No shipments found" sub={search ? `No results for "${search}"` : 'No shipments are assigned to your vehicle'} />
+          <div style={{ textAlign:'center', padding:'3rem', color:C.muted }}>
+            <div style={{ fontSize:'2.5rem', marginBottom:'0.5rem' }}>⏳</div>
+            <div>Load list aa rahi hai...</div>
+          </div>
+        ) : displayed.length===0 ? (
+          <div style={{
+            textAlign:'center', padding:'3rem',
+            background:C.card, borderRadius:'14px', border:`1px solid ${C.border}`,
+          }}>
+            <div style={{ fontSize:'2.5rem', marginBottom:'0.5rem' }}>{tab==='active'?'🚫':'📋'}</div>
+            <div style={{ fontWeight:700, color:C.text }}>
+              {tab==='active'?'Koi load nahi mila':'Abhi koi purana record nahi'}
+            </div>
+          </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-            {filtered.map(s => (
-              <ShipmentCard
-                key={s.id}
-                s={s}
-                uploading={uploadingId === s.shipment_id}
-                msg={uploadMsg[s.shipment_id]}
-                onUpload={handlePODUpload}
+          <div style={{ display:'flex', flexDirection:'column', gap:'0.85rem' }}>
+            {displayed.map(s=>(
+              <ShipmentCard key={s.id} s={s}
+                onUpload={()=>openUploadModal(s)}
+                onViewPod={()=>openPodPreview(s.shipment_id)}
+                onViewInvoice={()=>openInvoice(s.shipment_id)}
               />
             ))}
           </div>
         )}
       </div>
+
+      {/* Upload Modal */}
+      {uploadTarget && (
+        <UploadModal shipment={uploadTarget} photos={photos} previews={previews}
+          uploading={uploading} onPhotoSelect={handlePhotoSelect}
+          onSubmit={handleSubmit} onClose={closeUploadModal} />
+      )}
+
+      {/* POD Preview Modal */}
+      {(podPreview || podLoading) && (
+        <PodPreviewModal data={podPreview} loading={podLoading}
+          onClose={()=>{setPodPreview(null);setPodLoading(false);}} />
+      )}
     </div>
   );
 }
 
 
-// ─── Shipment Card ────────────────────────────────────────────────────────────
-function ShipmentCard({ s, uploading, msg, onUpload }) {
-  const podDone     = s.pod_status === 'Uploaded';
-  const onTime      = s.is_on_time;
-  const statusColor = onTime ? C.green : C.rose;
-
-  function handleFile(e) {
-    const file = e.target.files[0];
-    if (file) onUpload(s.shipment_id, file);
-    e.target.value = '';
-  }
+// ═══════════════════════════════════════════════════════════════════════════════
+// SHIPMENT CARD
+// ═══════════════════════════════════════════════════════════════════════════════
+function ShipmentCard({ s, onUpload, onViewPod, onViewInvoice }) {
+  const st = getStatus(s);
+  const podDone = s.pod_status === 'Uploaded';
 
   return (
     <div style={{
-      background: C.card,
-      border: `1px solid ${C.border}`,
-      borderRadius: '12px',
-      overflow: 'hidden',
-      boxShadow: C.shadow,
-      transition: 'box-shadow 0.2s, transform 0.2s',
+      background:C.card, border:`1px solid ${C.border}`,
+      borderRadius:'14px', overflow:'hidden', boxShadow:C.shadow,
+      transition:'box-shadow 0.2s, transform 0.2s',
     }}
-      onMouseEnter={e => { e.currentTarget.style.boxShadow = C.shadowMd; e.currentTarget.style.transform = 'translateY(-1px)'; }}
-      onMouseLeave={e => { e.currentTarget.style.boxShadow = C.shadow;   e.currentTarget.style.transform = 'translateY(0)'; }}
+      onMouseEnter={e=>{e.currentTarget.style.boxShadow=C.shadowMd;e.currentTarget.style.transform='translateY(-2px)';}}
+      onMouseLeave={e=>{e.currentTarget.style.boxShadow=C.shadow;e.currentTarget.style.transform='translateY(0)';}}
     >
-      {/* Top bar */}
+      {/* Top: CN + Status */}
       <div style={{
-        background: `linear-gradient(to right, ${podDone ? C.green : C.amber}18, transparent)`,
-        borderBottom: `1px solid ${podDone ? C.green : C.amber}25`,
-        padding: '0.65rem 1.25rem',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        background:st.bg, borderBottom:`1px solid ${st.color}20`,
+        padding:'0.7rem 1.15rem', display:'flex', justifyContent:'space-between', alignItems:'center',
       }}>
-        <span style={{ fontWeight: 800, fontSize: '0.92rem', color: C.text, fontFamily: 'monospace' }}>
-          {s.shipment_id}
-        </span>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <Pill bg={`${statusColor}15`} color={statusColor} border={`${statusColor}35`}>
-            {onTime ? '✅ On Time' : `⏱️ Delayed ${s.delay_days || 0}d`}
-          </Pill>
-          <Pill bg={podDone ? `${C.green}15` : `${C.amber}12`} color={podDone ? C.green : C.amber} border={podDone ? `${C.green}35` : `${C.amber}30`}>
-            {podDone ? '📄 POD Done' : '⏳ POD Pending'}
-          </Pill>
+        <div style={{ display:'flex', alignItems:'center', gap:'0.5rem' }}>
+          <span style={{ fontSize:'1.1rem' }}>{st.icon}</span>
+          <span style={{ fontWeight:800, fontSize:'1rem', color:C.text, fontFamily:'monospace' }}>{s.shipment_id}</span>
+        </div>
+        <span style={{
+          padding:'0.2rem 0.7rem', borderRadius:'999px', fontSize:'0.72rem',
+          fontWeight:700, background:`${st.color}15`, color:st.color, border:`1px solid ${st.color}30`,
+        }}>{st.label}</span>
+      </div>
+
+      {/* Details */}
+      <div style={{ padding:'0.85rem 1.15rem' }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'0.6rem 1.25rem' }}>
+          <DetailItem icon="📍" label="Kahan Se"       value={s.origin||'—'} />
+          <DetailItem icon="🏁" label="Kahan Tak"      value={s.destination||'—'} />
+          <DetailItem icon="🚛" label="Gaadi No."      value={s.vehicle_no||'N/A'} />
+          <DetailItem icon="📅" label="Bhejne Ki Date" value={s.dispatch_date||'—'} />
         </div>
       </div>
 
-      {/* Detail grid */}
-      <div style={{ padding: '1rem 1.25rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem 1.5rem' }}>
-        {[
-          ['🗺️ Route',    `${s.origin || '—'} → ${s.destination || '—'}`],
-          ['📅 Dispatch', s.dispatch_date || '—'],
-          ['📦 Delivery', s.delivery_date || 'Pending'],
-          ['🚗 Vehicle',  s.vehicle_no || '—'],
-          ['⚖️ Weight',   s.net_weight ? `${s.net_weight} MT` : '—'],
-          ['💰 Freight',  s.revenue ? `₹${Number(s.revenue).toLocaleString('en-IN')}` : '—'],
-        ].map(([label, val]) => (
-          <div key={label}>
-            <div style={{ fontSize: '0.67rem', color: C.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</div>
-            <div style={{ fontSize: '0.88rem', color: C.text, fontWeight: 600, marginTop: '0.1rem' }}>{val}</div>
-          </div>
-        ))}
-      </div>
-
       {/* Actions */}
-      <div style={{ borderTop: `1px solid ${C.border}`, padding: '0.75rem 1.25rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', background: '#fafafa' }}>
+      <div style={{ borderTop:`1px solid ${C.border}`, padding:'0.7rem 1.15rem', background:'#fafbfc' }}>
         {podDone ? (
-          <span style={{ color: C.green, fontWeight: 600, fontSize: '0.85rem' }}>✅ POD Submitted</span>
+          <div>
+            <div style={{
+              display:'flex', alignItems:'center', gap:'0.5rem',
+              color:C.green, fontWeight:700, fontSize:'0.88rem', marginBottom:'0.6rem',
+            }}>
+              ✅ Upload ho gaya
+              {s.pod_uploaded_at && (
+                <span style={{ color:C.muted, fontWeight:500, fontSize:'0.72rem' }}>
+                  · {new Date(s.pod_uploaded_at).toLocaleDateString('en-IN')}
+                </span>
+              )}
+            </div>
+            {/* Two buttons: View POD + View Invoice */}
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'0.5rem' }}>
+              <button onClick={onViewPod} style={{
+                padding:'0.6rem', background:`linear-gradient(135deg, ${C.teal}, ${C.tealDk})`,
+                color:'#fff', border:'none', borderRadius:'9px',
+                fontWeight:700, fontSize:'0.82rem', cursor:'pointer', fontFamily:'inherit',
+                boxShadow:`0 3px 10px ${C.teal}30`,
+              }}>📸 POD Dekho</button>
+              <button onClick={onViewInvoice} style={{
+                padding:'0.6rem', background:`linear-gradient(135deg, ${C.blue}, #2563eb)`,
+                color:'#fff', border:'none', borderRadius:'9px',
+                fontWeight:700, fontSize:'0.82rem', cursor:'pointer', fontFamily:'inherit',
+                boxShadow:`0 3px 10px ${C.blue}30`,
+              }}>📄 Invoice Dekho</button>
+            </div>
+          </div>
         ) : (
-          <label style={{
-            padding: '0.48rem 1rem',
-            background: `linear-gradient(135deg, ${C.teal}, #0f766e)`,
-            color: '#fff', borderRadius: '7px', fontWeight: 700,
-            fontSize: '0.82rem', cursor: uploading ? 'not-allowed' : 'pointer',
-            opacity: uploading ? 0.6 : 1, transition: 'opacity 0.2s',
-          }}>
-            {uploading ? '⬆️ Uploading…' : '📤 Upload POD'}
-            <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={handleFile} style={{ display: 'none' }} disabled={uploading} />
-          </label>
-        )}
-
-        <a
-          href={`${downloadInvoice(s.shipment_id)}?token=${localStorage.getItem('access_token') || ''}`}
-          target="_blank" rel="noreferrer"
-          style={{ padding: '0.48rem 1rem', background: C.card, border: `1px solid ${C.border}`, color: C.sub, borderRadius: '7px', fontSize: '0.82rem', fontWeight: 600, textDecoration: 'none' }}
-        >
-          📄 Invoice
-        </a>
-
-        {msg && (
-          <span style={{ fontSize: '0.8rem', color: msg.startsWith('✅') ? C.green : C.rose, fontWeight: 600 }}>
-            {msg}
-          </span>
+          <button onClick={onUpload} style={{
+            width:'100%', padding:'0.75rem',
+            background:`linear-gradient(135deg, ${C.teal}, ${C.tealDk})`,
+            color:'#fff', border:'none', borderRadius:'10px',
+            fontWeight:700, fontSize:'0.95rem', cursor:'pointer', fontFamily:'inherit',
+            boxShadow:`0 3px 10px ${C.teal}30`,
+          }}
+            onMouseDown={e=>{e.currentTarget.style.transform='scale(0.98)';}}
+            onMouseUp={e=>{e.currentTarget.style.transform='scale(1)';}}
+          >📸 Photo Bhejo</button>
         )}
       </div>
     </div>
@@ -265,78 +353,244 @@ function ShipmentCard({ s, uploading, msg, onUpload }) {
 }
 
 
-// ─── Shared widgets ───────────────────────────────────────────────────────────
-function StatCard({ icon, label, value, accent, bg }) {
+// ═══════════════════════════════════════════════════════════════════════════════
+// POD PREVIEW MODAL — Shows uploaded images in a gallery
+// ═══════════════════════════════════════════════════════════════════════════════
+function PodPreviewModal({ data, loading, onClose }) {
   return (
     <div style={{
-      background: C.card, border: `1px solid ${C.border}`,
-      borderRadius: '12px', padding: '1.1rem 1.25rem',
-      borderTop: `3px solid ${accent}`,
-      boxShadow: C.shadow,
+      position:'fixed', inset:0, background:'rgba(0,0,0,0.6)',
+      backdropFilter:'blur(6px)', display:'flex', alignItems:'center',
+      justifyContent:'center', zIndex:1000, padding:'1rem',
+    }} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{
+        background:C.card, borderRadius:'18px', width:'100%', maxWidth:'520px',
+        maxHeight:'90vh', overflow:'auto', boxShadow:C.shadowLg,
+      }}>
+        {/* Header */}
+        <div style={{
+          background:`linear-gradient(135deg, ${C.teal}, ${C.tealDk})`,
+          padding:'1.1rem 1.25rem', color:'#fff',
+          display:'flex', justifyContent:'space-between', alignItems:'center',
+        }}>
+          <div>
+            <div style={{ fontWeight:900, fontSize:'1.1rem' }}>📸 POD Photos</div>
+            {data && (
+              <div style={{ fontSize:'0.78rem', opacity:0.85, marginTop:'0.15rem' }}>
+                {data.shipment_id} · {data.origin} → {data.destination}
+              </div>
+            )}
+          </div>
+          <button onClick={onClose} style={{
+            background:'rgba(255,255,255,0.2)', border:'none', color:'#fff',
+            borderRadius:'50%', width:'32px', height:'32px', cursor:'pointer',
+            fontSize:'1rem', display:'flex', alignItems:'center', justifyContent:'center',
+          }}>✕</button>
+        </div>
+
+        {/* Content */}
+        <div style={{ padding:'1.25rem' }}>
+          {loading ? (
+            <div style={{ textAlign:'center', padding:'2rem', color:C.muted }}>
+              <div style={{ fontSize:'2rem', marginBottom:'0.5rem' }}>⏳</div>
+              <div>Photos load ho rahe hain...</div>
+            </div>
+          ) : !data || data.images.length === 0 ? (
+            <div style={{ textAlign:'center', padding:'2rem', color:C.muted }}>
+              <div style={{ fontSize:'2rem', marginBottom:'0.5rem' }}>🚫</div>
+              <div>Koi photo nahi mili</div>
+            </div>
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:'1rem' }}>
+              {/* Shipment info bar */}
+              <div style={{
+                display:'grid', gridTemplateColumns:'1fr 1fr',
+                gap:'0.5rem', padding:'0.75rem',
+                background:'#f8fafc', borderRadius:'10px',
+                border:`1px solid ${C.border}`,
+              }}>
+                <div>
+                  <div style={{ fontSize:'0.6rem', color:C.muted, fontWeight:700, textTransform:'uppercase' }}>GAADI</div>
+                  <div style={{ fontSize:'0.85rem', fontWeight:600, color:C.text }}>{data.vehicle_no||'—'}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize:'0.6rem', color:C.muted, fontWeight:700, textTransform:'uppercase' }}>DATE</div>
+                  <div style={{ fontSize:'0.85rem', fontWeight:600, color:C.text }}>{data.dispatch_date||'—'}</div>
+                </div>
+              </div>
+
+              {/* Images */}
+              {data.images.map((img, idx) => (
+                <div key={idx}>
+                  <div style={{
+                    fontSize:'0.72rem', fontWeight:700, color:C.sub,
+                    textTransform:'uppercase', marginBottom:'0.35rem',
+                  }}>
+                    📷 Photo {img.index}
+                  </div>
+                  <div style={{
+                    borderRadius:'12px', overflow:'hidden',
+                    border:`2px solid ${C.teal}30`,
+                    boxShadow:C.shadow,
+                  }}>
+                    <img
+                      src={img.url}
+                      alt={`POD Photo ${img.index}`}
+                      style={{
+                        width:'100%', maxHeight:'300px',
+                        objectFit:'contain', display:'block',
+                        background:'#f1f5f9',
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+
+              {/* Upload info */}
+              {data.pod_uploaded_at && (
+                <div style={{
+                  textAlign:'center', fontSize:'0.75rem', color:C.muted,
+                  padding:'0.5rem', background:'#f8fafc', borderRadius:'8px',
+                }}>
+                  📅 Upload kiya: {new Date(data.pod_uploaded_at).toLocaleString('en-IN')}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Close button */}
+          <button onClick={onClose} style={{
+            width:'100%', padding:'0.75rem', marginTop:'1rem',
+            background:`linear-gradient(135deg, ${C.teal}, ${C.tealDk})`,
+            color:'#fff', border:'none', borderRadius:'10px',
+            fontWeight:700, fontSize:'0.9rem', cursor:'pointer', fontFamily:'inherit',
+          }}>Band Karo</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// UPLOAD MODAL
+// ═══════════════════════════════════════════════════════════════════════════════
+function UploadModal({ shipment, photos, previews, uploading, onPhotoSelect, onSubmit, onClose }) {
+  const labels = ['Photo 1 (zaruri)', 'Photo 2 (agar ho)', 'Photo 3 (agar ho)'];
+  return (
+    <div style={{
+      position:'fixed', inset:0, background:'rgba(0,0,0,0.5)',
+      backdropFilter:'blur(4px)', display:'flex', alignItems:'center',
+      justifyContent:'center', zIndex:1000, padding:'1rem',
+    }} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{
+        background:C.card, borderRadius:'18px', width:'100%', maxWidth:'440px',
+        boxShadow:C.shadowLg, overflow:'hidden',
+      }}>
+        <div style={{
+          background:`linear-gradient(135deg, ${C.teal}, ${C.tealDk})`,
+          padding:'1.1rem 1.25rem', color:'#fff',
+        }}>
+          <div style={{ fontWeight:900, fontSize:'1.1rem' }}>📸 Photo Bhejo</div>
+          <div style={{ fontSize:'0.78rem', opacity:0.85, marginTop:'0.15rem' }}>
+            {shipment.shipment_id} · {shipment.origin} → {shipment.destination}
+          </div>
+          <div style={{ fontSize:'0.7rem', opacity:0.7, marginTop:'0.2rem' }}>
+            ⚡ Photo bhejte hi manager ko notification jayega
+          </div>
+        </div>
+        <div style={{ padding:'1.25rem' }}>
+          <div style={{ display:'flex', flexDirection:'column', gap:'0.85rem' }}>
+            {labels.map((label, i) => (
+              <div key={i}>
+                <div style={{
+                  fontSize:'0.75rem', fontWeight:700, color:C.sub,
+                  textTransform:'uppercase', marginBottom:'0.35rem',
+                }}>{label}</div>
+                {previews[i] ? (
+                  <div style={{
+                    position:'relative', borderRadius:'10px', overflow:'hidden',
+                    border:`2px solid ${C.teal}40`,
+                  }}>
+                    <img src={previews[i]} alt={`POD ${i+1}`}
+                      style={{ width:'100%', height:'120px', objectFit:'cover', display:'block' }} />
+                    <button onClick={()=>onPhotoSelect(i,null)} style={{
+                      position:'absolute', top:'6px', right:'6px',
+                      background:'rgba(0,0,0,0.6)', color:'#fff', border:'none',
+                      borderRadius:'50%', width:'26px', height:'26px', cursor:'pointer',
+                      fontSize:'0.8rem', display:'flex', alignItems:'center', justifyContent:'center',
+                    }}>✕</button>
+                  </div>
+                ) : (
+                  <label style={{
+                    display:'flex', alignItems:'center', justifyContent:'center', gap:'0.5rem',
+                    padding:'1.1rem', border:`2px dashed ${C.border}`, borderRadius:'10px',
+                    cursor:'pointer', background:'#f8fafc', color:C.muted,
+                    fontSize:'0.88rem', fontWeight:600,
+                  }}
+                    onMouseEnter={e=>{e.currentTarget.style.borderColor=C.teal;e.currentTarget.style.background=C.tealGlow;}}
+                    onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.background='#f8fafc';}}
+                  >
+                    📷 {i===0?'Photo choose karo':'Photo daalo (optional)'}
+                    <input type="file" accept="image/*" capture="environment"
+                      onChange={e=>{if(e.target.files[0])onPhotoSelect(i,e.target.files[0]);e.target.value='';}}
+                      style={{ display:'none' }} />
+                  </label>
+                )}
+              </div>
+            ))}
+          </div>
+          <div style={{ display:'flex', gap:'0.75rem', marginTop:'1.25rem' }}>
+            <button onClick={onSubmit} disabled={uploading} style={{
+              flex:1, padding:'0.8rem',
+              background:uploading?C.muted:`linear-gradient(135deg, ${C.teal}, ${C.tealDk})`,
+              color:'#fff', border:'none', borderRadius:'10px',
+              fontWeight:700, fontSize:'0.95rem',
+              cursor:uploading?'not-allowed':'pointer', fontFamily:'inherit',
+            }}>
+              {uploading?'⏳ Bhej rahe hain...':'✅ Bhej Do'}
+            </button>
+            <button onClick={onClose} disabled={uploading} style={{
+              padding:'0.8rem 1.1rem', background:'#f1f5f9',
+              border:`1px solid ${C.border}`, borderRadius:'10px',
+              color:C.sub, fontWeight:600, fontSize:'0.9rem', cursor:'pointer', fontFamily:'inherit',
+            }}>Band Karo</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+function MiniStat({ icon, value, label, color }) {
+  return (
+    <div style={{
+      background:C.card, border:`1px solid ${C.border}`, borderRadius:'12px',
+      padding:'0.85rem 0.75rem', textAlign:'center',
+      borderTop:`3px solid ${color}`, boxShadow:C.shadow,
     }}>
-      <div style={{ width: '38px', height: '38px', borderRadius: '8px', background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem', marginBottom: '0.6rem' }}>{icon}</div>
-      <div style={{ fontSize: '1.75rem', fontWeight: 800, color: accent, lineHeight: 1 }}>{value}</div>
-      <div style={{ fontSize: '0.75rem', color: C.muted, marginTop: '0.25rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</div>
+      <div style={{ fontSize:'1.1rem', marginBottom:'0.2rem' }}>{icon}</div>
+      <div style={{ fontSize:'1.6rem', fontWeight:800, color, lineHeight:1 }}>{value}</div>
+      <div style={{
+        fontSize:'0.68rem', color:C.muted, fontWeight:700,
+        textTransform:'uppercase', letterSpacing:'0.05em', marginTop:'0.2rem',
+      }}>{label}</div>
     </div>
   );
 }
 
-function RoleBadge({ color, bg, label, icon }) {
+function DetailItem({ icon, label, value }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.3rem 0.75rem', background: bg, border: `1px solid ${color}30`, borderRadius: '999px' }}>
-      <span style={{ fontSize: '0.85rem' }}>{icon}</span>
-      <span style={{ fontSize: '0.68rem', fontWeight: 700, color, letterSpacing: '0.06em' }}>{label}</span>
+    <div>
+      <div style={{
+        fontSize:'0.65rem', color:C.muted, fontWeight:700,
+        textTransform:'uppercase', letterSpacing:'0.04em',
+      }}>{icon} {label}</div>
+      <div style={{ fontSize:'0.9rem', color:C.text, fontWeight:600, marginTop:'0.1rem' }}>{value}</div>
     </div>
   );
-}
-
-function Pill({ bg, color, border, children }) {
-  return (
-    <span style={{ padding: '0.2rem 0.65rem', borderRadius: '999px', fontSize: '0.72rem', fontWeight: 700, background: bg, color, border: `1px solid ${border}` }}>
-      {children}
-    </span>
-  );
-}
-
-function LoadingState({ text }) {
-  return (
-    <div style={{ textAlign: 'center', padding: '4rem 2rem', color: C.muted }}>
-      <div style={{ fontSize: '2rem', marginBottom: '0.75rem' }}>⏳</div>
-      <div style={{ fontSize: '0.9rem' }}>{text}</div>
-    </div>
-  );
-}
-
-function EmptyState({ icon, title, sub }) {
-  return (
-    <div style={{ textAlign: 'center', padding: '4rem 2rem', background: C.card, borderRadius: '12px', border: `1px solid ${C.border}` }}>
-      <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>{icon}</div>
-      <div style={{ fontWeight: 700, color: C.text, fontSize: '1rem' }}>{title}</div>
-      <div style={{ fontSize: '0.82rem', color: C.muted, marginTop: '0.3rem' }}>{sub}</div>
-    </div>
-  );
-}
-
-// ─── Style helpers ────────────────────────────────────────────────────────────
-const lightInput = {
-  padding: '0.65rem 1rem', background: C.card,
-  border: `1px solid ${C.border}`, borderRadius: '8px',
-  color: C.text, fontSize: '0.9rem', outline: 'none',
-  fontFamily: 'inherit',
-};
-
-const ghostBtn = {
-  padding: '0.45rem 1rem', background: 'transparent',
-  border: `1px solid ${C.border}`, borderRadius: '7px',
-  color: C.sub, cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600,
-  fontFamily: 'inherit',
-};
-
-function outlineBtn(color) {
-  return {
-    padding: '0.65rem 1.1rem',
-    background: `${color}10`, border: `1px solid ${color}40`,
-    borderRadius: '8px', color, fontWeight: 700,
-    cursor: 'pointer', fontSize: '0.88rem', fontFamily: 'inherit',
-  };
 }

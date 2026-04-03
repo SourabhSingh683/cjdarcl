@@ -155,3 +155,55 @@ export async function fetchAIAnalysis(question = '') {
     body: JSON.stringify({ question }),
   });
 }
+
+// ─── Driver Panel ─────────────────────────────────────────────────────────────
+
+export const fetchDriverShipments = () =>
+  apiFetch('/driver/shipments/', {}, true);
+
+export async function uploadPodImages(shipmentId, photos) {
+  const formData = new FormData();
+  if (photos[0]) formData.append('pod_image_1', photos[0]);
+  if (photos[1]) formData.append('pod_image_2', photos[1]);
+  if (photos[2]) formData.append('pod_image_3', photos[2]);
+  return apiFetch(`/driver/upload-pod/${shipmentId}/`, {
+    method: 'POST',
+    body: formData,
+  }, true);
+}
+
+/** Download POD images (single image or ZIP) */
+export function downloadPodUrl(shipmentId) {
+  return `${API_BASE}/download-pod/${shipmentId}/`;
+}
+
+export async function downloadPod(shipmentId) {
+  const token = localStorage.getItem('access_token');
+  const url = `${API_BASE}/download-pod/${shipmentId}/`;
+  const res = await fetch(url, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const match = cd.match(/filename="?(.+?)"?$/);
+  const filename = match ? match[1] : `POD_${shipmentId}`;
+  // Trigger browser download
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+}
+
+/** Get POD image URLs for in-app preview */
+export const viewPod = (shipmentId) =>
+  apiFetch(`/view-pod/${shipmentId}/`, {}, true);
+
+/** Get invoice URL for viewing in new tab */
+export const getInvoiceUrl = (shipmentId) =>
+  `${API_BASE}/shipments/${shipmentId}/invoice/`;
+
+

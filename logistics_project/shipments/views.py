@@ -544,3 +544,237 @@ def ai_analyze(request):
     result = analyze_with_gemini(qs, user_question=question)
     return Response(result)
 
+
+# ═══════════════════════════════════════════════════════════
+# DRIVER PANEL — Simple Endpoints
+# ═══════════════════════════════════════════════════════════
+
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.parsers import MultiPartParser, FormParser
+from .serializers import DriverShipmentSerializer, PodImageUploadSerializer
+
+
+class DriverShipmentListView(APIView):
+    """
+    GET /api/driver/shipments/
+    Returns shipments assigned to the logged-in driver
+    (matched by vehicle_no from their UserProfile).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        profile = getattr(request.user, "profile", None)
+        if not profile or profile.role != "driver":
+            return Response(
+                {"error": "Driver profile not found."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        vehicle = (profile.vehicle_no or "").strip()
+        if not vehicle:
+            return Response([])  # no vehicle → no shipments
+
+        qs = (
+            Shipment.objects
+            .select_related("route")
+            .filter(vehicle_no__icontains=vehicle)
+            .order_by("-created_at")
+        )
+        serializer = DriverShipmentSerializer(qs, many=True, context={"request": request})
+        return Response(serializer.data)
+
+
+class UploadPodImagesView(APIView):
+    """
+    POST /api/driver/upload-pod/<int:shipment_id>/
+    Upload up to 3 POD photos for a shipment.
+    Only the assigned driver may upload.
+    """
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, shipment_id):
+        from django.utils import timezone
+
+        profile = getattr(request.user, "profile", None)
+        if not profile or profile.role not in ("driver", "manager"):
+            return Response(
+                {"error": "Only drivers can upload POD photos."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            shipment = Shipment.objects.get(id=shipment_id)
+        except Shipment.DoesNotExist:
+            return Response(
+                {"error": "Shipment not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Verify driver owns this shipment (vehicle match)
+        if profile.role == "driver":
+            vehicle = (profile.vehicle_no or "").strip().lower()
+            if vehicle and vehicle not in shipment.vehicle_no.lower():
+                return Response(
+                    {"error": "Ye shipment aapki gaadi ka nahi hai."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        serializer = PodImageUploadSerializer(
+            shipment, data=request.data, partial=True
+        )
+        if serializer.is_valid():
+            serializer.save()
+            shipment.pod_status = "Uploaded"
+            shipment.pod_uploaded_at = timezone.now()
+            shipment.assigned_driver = request.user
+            shipment.save(update_fields=[
+                "pod_status", "pod_uploaded_at", "assigned_driver",
+            ])
+            logger.info(
+                f"POD photos uploaded by {request.user.username} "
+                f"for shipment {shipment.shipment_id}"
+            )
+
+            # 🔔 Notify all Branch Managers
+            from accounts.signals import pod_uploaded
+            pod_uploaded.send(
+                sender=Shipment,
+                shipment_id=shipment.shipment_id,
+                driver_user=request.user,
+            )
+
+            return Response({
+                "message": "Photo upload ho gaya ✅",
+                "shipment_id": shipment.shipment_id,
+            })
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class DownloadPodView(APIView):
+    """
+    GET /api/download-pod/<shipment_id>/
+    Download POD images.
+      - Single image  → returns the image file directly
+      - Multiple images → returns a ZIP containing all images
+    Accessible by driver (own shipments) and manager (all shipments).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, shipment_id):
+        import io
+        import zipfile
+        import os
+        from django.http import FileResponse, HttpResponse
+
+        try:
+            shipment = Shipment.objects.get(shipment_id=shipment_id)
+        except Shipment.DoesNotExist:
+            # Also try by primary key
+            try:
+                shipment = Shipment.objects.get(id=shipment_id)
+            except (Shipment.DoesNotExist, ValueError):
+                return Response(
+                    {"error": "Shipment not found"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+        # Collect available POD images
+        images = []
+        for field_name in ("pod_image_1", "pod_image_2", "pod_image_3"):
+            field = getattr(shipment, field_name, None)
+            if field and field.name:
+                images.append(field)
+
+        if not images:
+            return Response(
+                {"error": "No POD images found for this shipment."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Single image → return directly
+        if len(images) == 1:
+            img = images[0]
+            ext = os.path.splitext(img.name)[1].lower() or ".jpg"
+            content_types = {
+                ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".png": "image/png", ".gif": "image/gif",
+                ".webp": "image/webp",
+            }
+            ct = content_types.get(ext, "application/octet-stream")
+            filename = f"POD_{shipment.shipment_id}{ext}"
+            return FileResponse(
+                img.open("rb"),
+                content_type=ct,
+                as_attachment=True,
+                filename=filename,
+            )
+
+        # Multiple images → ZIP
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for i, img in enumerate(images, 1):
+                ext = os.path.splitext(img.name)[1].lower() or ".jpg"
+                arc_name = f"POD_{shipment.shipment_id}_photo{i}{ext}"
+                zf.writestr(arc_name, img.read())
+
+        buffer.seek(0)
+        response = HttpResponse(buffer, content_type="application/zip")
+        response["Content-Disposition"] = (
+            f'attachment; filename="POD_{shipment.shipment_id}.zip"'
+        )
+        return response
+
+
+class ViewPodView(APIView):
+    """
+    GET /api/view-pod/<shipment_id>/
+    Returns POD image URLs + shipment info as JSON for in-app preview.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, shipment_id):
+        try:
+            shipment = Shipment.objects.select_related("route").get(
+                shipment_id=shipment_id
+            )
+        except Shipment.DoesNotExist:
+            try:
+                shipment = Shipment.objects.select_related("route").get(
+                    id=shipment_id
+                )
+            except (Shipment.DoesNotExist, ValueError):
+                return Response(
+                    {"error": "Shipment not found"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+        images = []
+        for i, field_name in enumerate(
+            ("pod_image_1", "pod_image_2", "pod_image_3"), 1
+        ):
+            field = getattr(shipment, field_name, None)
+            if field and field.name:
+                images.append({
+                    "index": i,
+                    "url": request.build_absolute_uri(field.url),
+                })
+
+        route = shipment.route
+        return Response({
+            "shipment_id": shipment.shipment_id,
+            "origin": route.origin if route else "",
+            "destination": route.destination if route else "",
+            "vehicle_no": shipment.vehicle_no,
+            "dispatch_date": str(shipment.dispatch_date) if shipment.dispatch_date else "",
+            "pod_status": shipment.pod_status,
+            "pod_uploaded_at": (
+                shipment.pod_uploaded_at.isoformat()
+                if shipment.pod_uploaded_at else None
+            ),
+            "images": images,
+            "image_count": len(images),
+        })
+
+
+
