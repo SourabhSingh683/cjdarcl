@@ -47,14 +47,18 @@ class Command(BaseCommand):
                 actual_delivery = expected_delivery + timedelta(days=random.randint(1, 5))
 
             data.append({
-                "shipment_id": f"SHP-{i:05d}",
+                "shipment_id": f"CN{1000 + i}",
                 "origin": origin,
                 "destination": destination,
                 "dispatch_date": dispatch.isoformat(),
                 "delivery_date": actual_delivery.isoformat(),
                 "expected_delivery_date": expected_delivery.isoformat(),
-                "revenue": round(random.uniform(5000, 150000), 2),
+                "revenue": round(random.uniform(10000, 95000), 2),
                 "vehicle_type": random.choice(vehicle_types),
+                "vehicle_no": f"JH05AB{random.randint(1000, 9999)}",
+                "consignor_name": "TATA STEEL LIMITED",
+                "consignee_name": "RUNGTA MINES LIMITED",
+                "transporter_name": "RAMESHWAR SINGH & SONS",
             })
 
         df = pd.DataFrame(data)
