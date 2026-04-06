@@ -10,7 +10,7 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import {
   authLogin, authOTPRequest, authOTPVerify,
-  authMe, authLogout,
+  authMe, authLogout, authVehicleLogin
 } from '../api';
 
 const AuthContext = createContext(null);
@@ -56,6 +56,16 @@ export function AuthProvider({ children }) {
     return data.user;
   }, []);
 
+  /** Login via vehicle number (added for driver simplicity) */
+  const loginVehicle = useCallback(async (vehicleNo) => {
+    setError(null);
+    const data = await authVehicleLogin(vehicleNo);
+    localStorage.setItem('access_token', data.access);
+    localStorage.setItem('refresh_token', data.refresh);
+    setUser(data.user);
+    return data.user;
+  }, []);
+
   /** Logout: clear tokens + reset state */
   const logout = useCallback(() => {
     authLogout();
@@ -63,7 +73,9 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading, error, login, requestOTP, loginOTP, logout }}>
+    <AuthContext.Provider value={{
+      user, loading, error, login, loginVehicle, requestOTP, loginOTP, logout
+    }}>
       {children}
     </AuthContext.Provider>
   );

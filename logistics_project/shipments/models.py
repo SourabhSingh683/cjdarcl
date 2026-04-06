@@ -150,6 +150,10 @@ class Shipment(models.Model):
         help_text="Net amount receivable after deductions",
     )
 
+    # --- Driver Info (New) ---
+    driver_name = models.CharField(max_length=255, blank=True, default="")
+    driver_phone = models.CharField(max_length=20, blank=True, default="")
+
     # --- Weight ---
     net_weight = models.DecimalField(
         max_digits=10, decimal_places=3, default=0,
@@ -197,6 +201,22 @@ class Shipment(models.Model):
     )
     billing_status = models.CharField(
         max_length=50, blank=True, default="", help_text="Status of the Billing",
+    )
+
+    # --- POD & Status (New) ---
+    pod_uploaded = models.BooleanField(default=False, db_index=True)
+    pod_url = models.URLField(max_length=1024, blank=True, default="")
+    invoice_url = models.URLField(max_length=1024, blank=True, default="")
+    
+    class ShipmentStatus(models.TextChoices):
+        PENDING = "pending", "Pending"
+        DELIVERED = "delivered", "Delivered"
+
+    status = models.CharField(
+        max_length=20,
+        choices=ShipmentStatus.choices,
+        default=ShipmentStatus.PENDING,
+        db_index=True,
     )
 
     # --- POD Upload (Driver submits proof) ---

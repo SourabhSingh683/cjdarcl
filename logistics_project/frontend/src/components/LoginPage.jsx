@@ -78,9 +78,10 @@ const inputStyle = {
 };
 
 export default function LoginPage({ onLoginSuccess }) {
-  const { login, requestOTP, loginOTP } = useAuth();
+  const { login, loginVehicle, requestOTP, loginOTP } = useAuth();
 
   const [mode, setMode]         = useState('password');
+  const [vehicleNo, setVehicleNo] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [phone, setPhone]       = useState('');
@@ -142,6 +143,20 @@ export default function LoginPage({ onLoginSuccess }) {
   }
 
   function resetOtp() { setOtpStep(1); setOtpCode(''); setDemoOtp(''); setErr(''); }
+
+  // ── Vehicle login ──────────────────────────────────────────────────────────
+  async function handleVehicleLogin(e) {
+    e.preventDefault();
+    if (!vehicleNo) { setErr('Please enter Gaadi Number.'); return; }
+    setLoading(true); setErr('');
+    try {
+      const user = await loginVehicle(vehicleNo);
+      onLoginSuccess(user.role);
+    } catch (ex) {
+      setErr(ex.message || 'Login failed. Gaadi number not found.');
+    }
+    setLoading(false);
+  }
 
   return (
     <div style={{
@@ -243,7 +258,7 @@ export default function LoginPage({ onLoginSuccess }) {
             background: '#f1f5f9', borderRadius: '8px',
             padding: '3px', marginBottom: '1.5rem', gap: '3px',
           }}>
-            {[['password', '🔑 Password'], ['otp', '📱 Mobile OTP']].map(([m, label]) => (
+            {[['password', '🔑 Password'], ['vehicle', '🚚 Gaadi No.'], ['otp', '📱 Mobile OTP']].map(([m, label]) => (
               <button key={m}
                 onClick={() => { setMode(m); setErr(''); resetOtp(); }}
                 style={{
@@ -295,6 +310,34 @@ export default function LoginPage({ onLoginSuccess }) {
                 style={primaryBtn(C.teal, C.tealDk, loading)}
               >
                 {loading ? '…Signing in' : 'Sign In →'}
+              </button>
+            </form>
+          )}
+
+          {/* ── Vehicle form ──────────────────────────────────────────────── */}
+          {mode === 'vehicle' && (
+            <form onSubmit={handleVehicleLogin}>
+              <label style={{ display: 'block', marginBottom: '1.25rem' }}>
+                <FieldLabel>Gaadi Number (Vehicle No.)</FieldLabel>
+                <input
+                  id="login-vehicle"
+                  style={inputStyle}
+                  placeholder="e.g. HR26-88219"
+                  value={vehicleNo}
+                  onChange={e => setVehicleNo(e.target.value)}
+                />
+                <div style={{ fontSize: '0.72rem', color: C.muted, marginTop: '0.4rem' }}>
+                  Drivers: Enter your vehicle number to see assigned loads.
+                </div>
+              </label>
+              {err && <ErrorBox msg={err} />}
+              <button
+                id="vehicle-login-submit"
+                type="submit"
+                disabled={loading}
+                style={primaryBtn(C.blue, '#1d4ed8', loading)}
+              >
+                {loading ? '…Scanning' : '🚚 Enter Driver Panel →'}
               </button>
             </form>
           )}
