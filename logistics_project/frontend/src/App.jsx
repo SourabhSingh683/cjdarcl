@@ -636,7 +636,7 @@ function AnalyticsView({ rootCause, risk, loading, error, summary, onDrilldown }
                 <XAxis dataKey="month" stroke="#6b7280" fontSize={12} tickLine={false} axisLine={false} />
                 <YAxis stroke="#6b7280" fontSize={11} allowDecimals={false} tickLine={false} axisLine={false} />
                 <Tooltip {...TOOLTIP_STYLE}
-                  formatter={(v, name) => [v, name === 'delayed' ? 'Delayed' : 'Total Shipments']}
+                  formatter={(v, name) => [v, name === 'Delayed' || name === 'delayed' ? 'Delayed Shipments' : 'Total Shipments']}
                   labelFormatter={(l) => `Month: ${l}`} />
                 <Legend iconType="circle" wrapperStyle={{ fontSize: '0.8rem', color: '#9ca3af' }} />
                 <Area type="monotone" dataKey="total" stroke={COLORS.blue} fill="transparent" strokeWidth={2} name="Total Shipments" />
@@ -650,7 +650,7 @@ function AnalyticsView({ rootCause, risk, loading, error, summary, onDrilldown }
                 <XAxis dataKey="month" stroke="#6b7280" fontSize={12} tickLine={false} axisLine={false} />
                 <YAxis stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} />
                 <Tooltip {...TOOLTIP_STYLE}
-                  formatter={(v, name) => [v, name === 'Total' ? 'Total Shipments' : 'Delayed']}
+                  formatter={(v, name) => [v, name === 'Total' || name === 'total' || name === 'Total Shipments' ? 'Total Shipments' : 'Delayed Shipments']}
                   labelFormatter={l => `Month: ${l}`} />
                 <Bar dataKey="total" fill={COLORS.blue} name="Total" radius={[4, 4, 0, 0]}
                   label={{ position: 'top', fill: '#6b7280', fontSize: 10 }} />
@@ -710,22 +710,7 @@ function AnalyticsView({ rootCause, risk, loading, error, summary, onDrilldown }
         </div>
       )}
 
-      {/* Shortage Summary */}
-      {rootCause.shortages && rootCause.shortages.total_shortage_shipments > 0 && (
-        <div className="chart-card">
-          <div className="chart-header"><div><div className="chart-title">📉 Shortage Analysis</div><div className="chart-subtitle">Material shortage impact summary</div></div></div>
-          <div style={{ display: 'flex', gap: '3rem', padding: '0.5rem 0', cursor: 'pointer' }} onClick={() => onDrilldown('shortage')}>
-            <div>
-              <span style={{ fontSize: '2rem', fontWeight: 800, color: COLORS.amber }}>{rootCause.shortages.total_shortage_shipments}</span>
-              <div className="kpi-sub">Affected Shipments</div>
-            </div>
-            <div>
-              <span style={{ fontSize: '2rem', fontWeight: 800, color: COLORS.amber }}>{rootCause.shortages.total_shortage_mt.toFixed(3)}</span>
-              <div className="kpi-sub">Total Shortage (MT)</div>
-            </div>
-          </div>
-        </div>
-      )}
+
     </div>
   );
 }
