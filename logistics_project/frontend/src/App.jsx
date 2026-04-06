@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import './index.css';
 import {
   fetchSummary, fetchRevenueTrends, fetchTopRoutes, fetchSmartInsights,
-  fetchUploadHistory, fetchRootCause, fetchRisk, fetchComparison,
+  fetchUploadHistory, fetchRootCause, fetchRisk,
   fetchQuality, fetchDrilldown, uploadFile, fetchAIAnalysis, deleteUpload, fetchShipments
 } from './api';
 import {
@@ -94,7 +94,6 @@ function ManagerDashboard({ user, onLogout }) {
   const [uploads, setUploads] = useState([]);
   const [rootCause, setRootCause] = useState(null);
   const [risk, setRisk] = useState(null);
-  const [comparison, setComparison] = useState(null);
   const [quality, setQuality] = useState(null);
   const [cnMatches, setCnMatches] = useState([]);
   const [drilldown, setDrilldown] = useState(null);
@@ -109,14 +108,14 @@ function ManagerDashboard({ user, onLogout }) {
     setLoading(true); setError(null);
     try {
       const cnno = (f?.cnno || '').trim();
-      const [s, t, r, i, u, c, q] = await Promise.all([
+      const [s, t, r, i, u, q] = await Promise.all([
         fetchSummary(f), fetchRevenueTrends({ ...f, group_by: 'day' }),
         fetchTopRoutes(f), fetchSmartInsights(f), fetchUploadHistory(),
-        fetchComparison(f), fetchQuality(),
+        fetchQuality(),
       ]);
       setSummary(s); setRevenueTrends(t); setTopRoutes(r);
       setInsights(i.insights || []); setUploads(u.results || []);
-      setComparison(c); setQuality(q);
+      setQuality(q);
       if (cnno) {
         const shipmentRes = await fetchShipments({ ...f, page_size: 25 });
         setCnMatches(shipmentRes.results || []);
@@ -214,7 +213,7 @@ function ManagerDashboard({ user, onLogout }) {
         </header>
 
         <main className="main-content">
-          {tab === 'dashboard' && <DashboardView {...{ summary, revenueTrends, topRoutes, insights, comparison, loading, error, filters, setFilters, cnMatches }} onFilter={handleFilter} onClear={handleClear} onDrilldown={openDrilldown} />}
+          {tab === 'dashboard' && <DashboardView {...{ summary, revenueTrends, topRoutes, insights, loading, error, filters, setFilters, cnMatches }} onFilter={handleFilter} onClear={handleClear} onDrilldown={openDrilldown} />}
           {tab === 'analytics' && <AnalyticsView rootCause={rootCause} risk={risk} loading={loading} error={error} summary={summary} onDrilldown={openDrilldown} />}
           {tab === 'ai' && <AICopilotView />}
           {tab === 'upload' && <UploadView onUploadDone={() => { setRootCause(null); setRisk(null); loadDashboard(filters); setTab('dashboard'); }} />}
@@ -249,29 +248,9 @@ function QualityBadge({ score }) {
 // ═══════════════════════════════════════════════════════════
 // Dashboard View
 // ═══════════════════════════════════════════════════════════
-function CompCard({ label, val, change, period, expl }) {
-  const [show, setShow] = useState(false);
-  return (
-    <div className="kpi-card blue" style={{ padding: '1rem', cursor: 'pointer' }} onClick={() => setShow(!show)}>
-      <div className="kpi-label" style={{ fontSize: '0.62rem', display: 'flex', justifyContent: 'space-between' }}>
-        <span>vs Last {period}d ⓘ</span>
-      </div>
-      {show && (
-        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.5rem', marginTop: '0.25rem', lineHeight: '1.2', padding: '0.3rem', background: 'var(--bg-elevated)', borderRadius: '4px', border: '1px solid var(--border-glass)' }}>
-          {expl}
-        </div>
-      )}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', marginTop: show ? '0' : '0.25rem' }}>
-        <span style={{ fontSize: '1.2rem', fontWeight: 700 }}>{val}</span>
-        {change != null && <ChangeArrow value={change} />}
-      </div>
-      <div className="kpi-sub">{label}</div>
-    </div>
-  );
-}
 
 // ═══════════════════════════════════════════════════════════
-function DashboardView({ summary, revenueTrends, topRoutes, insights, comparison, loading, error, filters, setFilters, cnMatches, onFilter, onClear, onDrilldown }) {
+function DashboardView({ summary, revenueTrends, topRoutes, insights, loading, error, filters, setFilters, cnMatches, onFilter, onClear, onDrilldown }) {
   if (error) return <ErrorState msg={error} onRetry={onFilter} />;
   if (loading) return <Spinner text="Loading command center..." />;
 
@@ -359,19 +338,6 @@ function DashboardView({ summary, revenueTrends, topRoutes, insights, comparison
           ) : (
             <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No shipment details found for this CN number.</div>
           )}
-        </div>
-      )}
-
-      {/* Period Comparison */}
-      {comparison && comparison.recent && comparison.prior && (
-        <div className="kpi-grid" style={{ marginBottom: '0.75rem' }}>
-          {[
-            ['Shipments', comparison.recent.total_shipments, comparison.changes.total_shipments, `Comparing shipment volume in the current period with the preceding ${comparison.period_days} days.`],
-            ['On-Time %', `${comparison.recent.on_time_pct}%`, comparison.changes.on_time_pct, `Comparing the percentage of on-time deliveries with the preceding ${comparison.period_days} days.`],
-            ['Penalties', `₹${comparison.recent.total_penalty.toLocaleString('en-IN')}`, comparison.changes.total_penalty, `Comparing total delay penalties incurred with the preceding ${comparison.period_days} days.`],
-          ].map(([label, val, change, expl]) => (
-            <CompCard key={label} label={label} val={val} change={change} period={comparison.period_days} expl={expl} />
-          ))}
         </div>
       )}
 
@@ -937,16 +903,6 @@ function DrilldownModal({ data, type, onClose }) {
 // ═══════════════════════════════════════════════════════════
 // Shared Components
 // ═══════════════════════════════════════════════════════════
-function ChangeArrow({ value }) {
-  if (value == null) return null;
-  const isPositive = value >= 0;
-  const color = isPositive ? '#10b981' : '#f43f5e';
-  return (
-    <span className={`kpi-trend ${isPositive ? 'up' : 'down'}`}>
-      {isPositive ? '▲' : '▼'} {Math.abs(value)}%
-    </span>
-  );
-}
 
 function KpiCard({ icon, label, value, sub, color, status, statusType }) {
   return (

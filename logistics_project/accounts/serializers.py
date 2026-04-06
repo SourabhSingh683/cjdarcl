@@ -93,6 +93,39 @@ class LoginSerializer(serializers.Serializer):
         return attrs
 
 
+class VehicleLoginSerializer(serializers.Serializer):
+    """Login via vehicle number ONLY (for drivers). Returns JWT tokens."""
+
+    vehicle_no = serializers.CharField()
+
+    def validate(self, attrs):
+        v = attrs["vehicle_no"].strip()
+        if not v:
+            raise serializers.ValidationError("Vehicle number is required.")
+
+        # Find a driver profile with this vehicle number
+        profile = UserProfile.objects.filter(role="driver", vehicle_no__icontains=v).first()
+
+        if not profile:
+            # OPTIONAL: auto-create user for new vehicle
+            from django.utils.crypto import get_random_string
+            username = f"driver_{v.replace('-', '').replace(' ', '')}"
+            user, created = User.objects.get_or_create(username=username)
+            if created:
+                user.set_unusable_password()
+                user.first_name = "New"
+                user.last_name = f"Driver ({v})"
+                user.save()
+            
+            profile, _ = UserProfile.objects.get_or_create(user=user)
+            profile.role = "driver"
+            profile.vehicle_no = v
+            profile.save()
+        
+        attrs["user"] = profile.user
+        return attrs
+
+
 # ─── OTP Flow ────────────────────────────────────────────────────────────────
 
 class OTPRequestSerializer(serializers.Serializer):

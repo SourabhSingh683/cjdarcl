@@ -58,6 +58,13 @@ export async function authLogin(username, password) {
   });
 }
 
+export async function authVehicleLogin(vehicleNo) {
+  return apiFetch('/auth/vehicle-login/', {
+    method: 'POST',
+    body: JSON.stringify({ vehicle_no: vehicleNo }),
+  });
+}
+
 export async function authOTPRequest(phone) {
   return apiFetch('/auth/otp/request/', {
     method: 'POST',
