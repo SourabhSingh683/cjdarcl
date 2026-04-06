@@ -191,25 +191,39 @@ def _bulk_insert_shipments(df, upload_log):
     """Bulk-insert with cross-file dedup on shipment_id."""
     # Routes
     route_pairs = df[["origin", "destination"]].drop_duplicates().values.tolist()
-    route_cache = {}
-    for origin, destination in route_pairs:
-        route, _ = Route.objects.get_or_create(origin=origin, destination=destination)
-        route_cache[(origin, destination)] = route
+    # Optimize Routes: Pre-fetch based on origin and dest lists
+    route_origins = [o for o, d in route_pairs]
+    route_dests = [d for o, d in route_pairs]
+    existing_routes = Route.objects.filter(origin__in=route_origins, destination__in=route_dests)
+    route_cache = {(r.origin, r.destination): r for r in existing_routes}
 
-    # Existing IDs for upsert
+    missing_routes = []
+    for origin, destination in route_pairs:
+        if (origin, destination) not in route_cache:
+            missing_routes.append(Route(origin=origin, destination=destination))
+            route_cache[(origin, destination)] = None  # mark as visited to prevent duplicates
+
+    if missing_routes:
+        # ignore_conflicts isn't strictly needed if we generated missing properly,
+        # but it protects against concurrent uploads
+        Route.objects.bulk_create(missing_routes, ignore_conflicts=True)
+        existing_new = Route.objects.filter(origin__in=route_origins, destination__in=route_dests)
+        for r in existing_new:
+            route_cache[(r.origin, r.destination)] = r
+
+    # Pre-fetch existing shipments for upsert
     incoming_ids = set(df["shipment_id"].tolist())
-    existing_ids = set(
-        Shipment.objects.filter(shipment_id__in=incoming_ids)
-        .values_list("shipment_id", flat=True)
-    )
+    existing_shipments_list = list(Shipment.objects.filter(shipment_id__in=incoming_ids))
+    existing_shipments = {s.shipment_id: s for s in existing_shipments_list}
 
     to_create, to_update = [], []
     for _, row in df.iterrows():
         route = route_cache[(row["origin"], row["destination"])]
         data = _build_shipment_data(row, route, upload_log)
 
-        if row["shipment_id"] in existing_ids:
-            shipment = Shipment.objects.get(shipment_id=row["shipment_id"])
+        sid = row["shipment_id"]
+        if sid in existing_shipments:
+            shipment = existing_shipments[sid]
             for key, value in data.items():
                 if key != "shipment_id":
                     setattr(shipment, key, value)
