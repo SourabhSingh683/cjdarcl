@@ -3,7 +3,7 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { fetchShipments, downloadInvoice } from '../api';
+import { fetchShipments, downloadInvoiceAction } from '../api';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const C = {
@@ -214,8 +214,16 @@ export default function CustomerPanel() {
 function CustomerShipmentCard({ s, expanded, onToggle }) {
   const status      = inferStatus(s);
   const statusColor = status === 'Delivered' ? C.green : status === 'In Transit' ? C.teal : C.amber;
+  const [dlLoading, setDlLoading] = useState(false);
   const podDone     = s.pod_status === 'Uploaded';
-  const invoiceUrl  = downloadInvoice(s.shipment_id);
+
+  const handleDownload = async (e) => {
+    e.preventDefault(); e.stopPropagation();
+    setDlLoading(true);
+    try { await downloadInvoiceAction(s.shipment_id); } 
+    catch (err) { alert(err.message); }
+    setDlLoading(false);
+  };
 
   return (
     <div style={{
@@ -325,7 +333,6 @@ function CustomerShipmentCard({ s, expanded, onToggle }) {
               ['⚖️ Weight',     s.net_weight ? `${s.net_weight} MT` : '—'],
               ['📦 Material',   s.material_type || '—'],
               ['🚗 Vehicle',    s.vehicle_no || '—'],
-              ['💰 Freight',    s.revenue ? `₹${Number(s.revenue).toLocaleString('en-IN')}` : '—'],
               ['📄 POD Status', s.pod_status || 'Pending'],
               ['🧾 Billing',    s.billing_status || 'Pending'],
             ].map(([label, value]) => (
@@ -337,20 +344,21 @@ function CustomerShipmentCard({ s, expanded, onToggle }) {
           </div>
 
           {/* Invoice button */}
-          <a
-            href={invoiceUrl}
-            target="_blank" rel="noreferrer"
+          <button
+            onClick={handleDownload}
+            disabled={dlLoading}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
               padding: '0.55rem 1.25rem',
-              background: `${C.teal}10`, border: `1px solid ${C.teal}35`,
+              background: dlLoading ? C.bg : `${C.teal}10`, 
+              border: `1px solid ${C.teal}35`,
               borderRadius: '8px', color: C.teal,
-              fontSize: '0.85rem', fontWeight: 700, textDecoration: 'none',
+              fontSize: '0.85rem', fontWeight: 700, cursor: dlLoading ? 'not-allowed' : 'pointer',
               transition: 'all 0.2s',
             }}
           >
-            📄 Download Invoice
-          </a>
+            {dlLoading ? '⏳ Generating...' : '📄 Download Invoice'}
+          </button>
         </div>
       )}
     </div>

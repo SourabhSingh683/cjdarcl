@@ -62,7 +62,8 @@ def _filter_by_role(qs, request):
         return qs.filter(vehicle_no__icontains=vehicle) if vehicle else qs.none()
     if profile.role == "customer":
         cust = profile.customer_id.strip()
-        return qs.filter(customer_name__icontains=cust) if cust else qs.none()
+        # Consignee-based filtering
+        return qs.filter(consignee_name__icontains=cust) if cust else qs.none()
     return qs.none()
 
 
@@ -532,7 +533,15 @@ def generate_invoice_view(request, shipment_id):
     from shipments.services.pdf_generator import generate_invoice
 
     try:
-        pdf_bytes = generate_invoice(shipment_id)
+        # Detect role for conditional financial data visibility.
+        # Defaults to 'customer' (restricted) if unauthenticated or no profile.
+        role = "customer"
+        if request.user.is_authenticated and hasattr(request.user, "profile"):
+            role = request.user.profile.role
+        
+        hide_financials = (role != "manager") # Only Managers see full details
+        
+        pdf_bytes = generate_invoice(shipment_id, hide_financials=hide_financials)
     except Shipment.DoesNotExist:
         return Response({"error": "Shipment not found."}, status=status.HTTP_404_NOT_FOUND)
     except Exception as exc:

@@ -10,7 +10,7 @@ import logging
 import os
 from decimal import Decimal
 
-from django.db.models import Count, Sum, Avg, Q
+from django.db.models import Count, Sum, Avg, Q, FloatField
 from django.db.models.functions import Coalesce
 from dotenv import load_dotenv
 from pathlib import Path
@@ -37,9 +37,12 @@ I. Exceptions: Shortages or damages causing cargo loss.
 
 Your responses must be:
 - Data-driven and specific (reference actual numbers/transporters/regions)
+- Explain delays as 'X delayed shipments out of Y total' (e.g. 31 delayed out of 1093)
+- For route-level analysis, provide a severity breakdown: '1 day delay: XX%, 2 days: YY%, more than 7 days: ZZ%'
 - Actionable (suggest SLA reviews for bad transporters, rerouting, etc)
 - Concise but comprehensive using bullet points
 - Include risk levels (🔴 High, 🟡 Medium, 🟢 Low)
+- DO NOT explain or mention penalty amounts in currency (₹) unless specifically asked. Focus on operational impact rather than money values.
 
 Format your response with these sections:
 ## 📊 Key Findings
@@ -190,38 +193,70 @@ def _generate_fallback_response(user_question, data_points):
     
     q = user_question.lower()
     
-    if delayed == 0 and data_points.get("total_penalties", 0) == 0:
+    if delayed == 0:
         return base_insights
 
     if "trend" in q or "performance" in q:
         return (
             "### 📈 Performance Trends Analysis\n\n"
             f"- **Overall Volume**: {total} shipments processed.\n"
-            f"- **On-Time Reliability**: Holding at **{on_time}%**. Consistency here protects your raw freight value (₹{rev:,.2f}).\n"
-            f"- **Impact Tracking**: Currently, {delayed} shipments missed targets. If this trend is seasonal, expect higher capacity crunches next quarter.\n\n"
+            f"- **Service Reliability**: Holding at **{on_time}%**. Consistent performance here protects your raw freight value.\n"
+            f"- **Impact Tracking**: Currently, {delayed} shipments missed transit targets. This represents about **{round((delayed / total) * 100, 1) if total > 0 else 0}%** of your total operation.\n\n"
             "**Action:** Head to the visual `Analytics` tab to compare precise month-over-month performance trends.\n\n"
             "*(Note: AI analytical modeling is temporarily unavailable. Showing rule-based trends.)*"
         )
-    elif "issue" in q or "recommendation" in q or "optimiz" in q:
-        return (
-            "### 💡 Optimization Recommendations\n\n"
-            f"**1. Address Delays ({delayed} Shipments)**\n"
-            "   - **Root Cause**: High delay volumes typically originate from severe weather or vendor mismanagement on core routes.\n"
-            "   - **Action**: Check the Analytics tab for the `Route Risk Matrix` to identify the specific worst-performing lanes.\n\n"
-            f"**2. Mitigate Financial Penalties (₹{data_points.get('total_penalties', 0):,.2f})**\n"
-            "   - **Action**: Renegotiate SLAs with vendors who repeatedly fail transit times, and hold strict compliance checks on loading to prevent shortages.\n\n"
-            "**3. Improve On-Time Rate**\n"
-            f"   - **Current Rate**: {on_time}%\n"
-            "   - **Target**: Pushing this above 95% will drastically cut penalty overhead and improve client satisfaction.\n\n"
-            "*(Note: Advanced AI insights are temporarily unavailable. Showing rule-based strategy.)*"
-        )
-    elif "delay" in q or "attention" in q or "risk" in q or "route" in q:
+    elif "issue" in q or "risk" in q or "attention" in q:
+        worst_r = data_points.get("worst_routes", [{}])[0]
+        worst_t = data_points.get("worst_transporters", [{}])[0]
+        
+        issue_details = f"### 🚨 Top Issues Identified\n\n"
+        if worst_r:
+            issue_details += f"**1. High-Risk Route: {worst_r.get('route__origin')} → {worst_r.get('route__destination')}**\n"
+            issue_details += f"   - **Impact**: {worst_r.get('delayed', 0)} delayed shipments (out of {worst_r.get('count', 0)} total).\n"
+            issue_details += f"   - **Severity**: Over {round(((worst_r.get('d7plus', 0) / worst_r.get('delayed', 1)) * 100),1) if worst_r.get('delayed', 0) > 0 else 0}% of these show severe delay (>7 days).\n\n"
+        
+        if worst_t:
+            issue_details += f"**2. Transporter Bottleneck: {worst_t.get('transporter_name', 'N/A')}**\n"
+            issue_details += f"   - **Impact**: {worst_t.get('delayed', 0)} delays out of {worst_t.get('total', 0)} assignments.\n\n"
+        
+        issue_details += "### ⚠️ Risk Outlook\n"
+        issue_details += f"Current reliability is **{on_time}%**. The {delayed} delays indicate systemic transit bottlenecks require attention.\n\n"
+        
+        return issue_details + "*(Note: Advanced AI analysis is temporarily unavailable. Showing rule-based issue matrix.)*"
+
+    elif "recommendation" in q or "optimiz" in q:
+        worst_t = data_points.get("worst_transporters", [{}])[0]
+        
+        rec_details = "### 💡 Strategic Optimization Recommendations\n\n"
+        if worst_t:
+            rec_details += f"**1. Vendor SLA Audit: {worst_t.get('transporter_name', 'N/A')}**\n"
+            rec_details += f"   - **Action**: Immediately review transit performance. Vendor is failing on {round((worst_t.get('delayed', 0) / worst_t.get('total', 1)) * 100, 1) if worst_t.get('total', 0) > 0 else 0}% of shipments.\n\n"
+        
+        rec_details += "**2. Route Diversification**\n"
+        rec_details += "   - **Action**: Identify alternative carriers for lanes where 1-2 day delays are recurring to prevent backlog buildup.\n\n"
+        
+        rec_details += f"**3. Target Stability Enhancement**\n"
+        rec_details += f"   - **Target**: Pushing the on-time rate from **{on_time}%** back to **95%** will significantly reduce billing disputes.\n\n"
+        
+        return rec_details + "*(Note: Advanced AI analysis is temporarily unavailable. Showing rule-based strategy.)*"
+    elif "delay" in q or "route" in q:
         routes_text = ""
         trans_text = ""
         if "worst_routes" in data_points and data_points["worst_routes"]:
             routes_text = "### 🚨 Routes Needing Immediate Attention:\n"
             for r in data_points["worst_routes"]:
-                routes_text += f"- **{r['route__origin']} → {r['route__destination']}**: {r['count']} delayed shipments, incurring ₹{float(r['penalty']):,.0f} penalty.\n"
+                # Total shipments on this route
+                total_on_route = r.get('count', 0)
+                delayed_on_route = r.get('delayed', 0)
+                
+                # Percentages relative to delayed shipments
+                p1 = round((r.get('d1', 0) / delayed_on_route) * 100, 1) if delayed_on_route > 0 else 0
+                p2 = round((r.get('d2', 0) / delayed_on_route) * 100, 1) if delayed_on_route > 0 else 0
+                p7 = round((r.get('d7plus', 0) / delayed_on_route) * 100, 1) if delayed_on_route > 0 else 0
+                
+                routes_text += f"- **{r['route__origin']} → {r['route__destination']}**: {delayed_on_route} delayed shipments out of {total_on_route}.\n"
+                routes_text += f"  - Breakdown: 1 day delay: **{p1}%**, 2 days: **{p2}%**, >7 days: **{p7}%**\n"
+
         if "worst_transporters" in data_points and data_points["worst_transporters"]:
             trans_text = "\n### 🚛 Transporters Causing Delays:\n"
             for t in data_points["worst_transporters"]:
@@ -231,24 +266,15 @@ def _generate_fallback_response(user_question, data_points):
             routes_text + trans_text +
             f"\n### ⚠️ Overall Snapshot\n"
             f"- Out of {total} shipments, **{delayed} are currently delayed**.\n"
-            "- **Action**: Prioritize resolving delays on the longest-running routes to limit penalty exposure.\n\n"
+            "- **Action**: Prioritize resolving delays on the longest-running routes to limit operational impact.\n\n"
             "*(Note: Advanced AI route-level tracking is temporarily unavailable. Showing rule-based summary.)*"
         )
-    elif "revenue" in q or "penalty" in q or "cost" in q or "freight" in q:
-        penalty_text = ""
-        if "worst_routes" in data_points and data_points["worst_routes"]:
-            penalty_text = "### 🛑 Highest Penalty Routes:\n"
-            sorted_routes = sorted(data_points["worst_routes"], key=lambda x: x['penalty'], reverse=True)
-            for r in sorted_routes:
-                if r['penalty'] > 0:
-                    penalty_text += f"- **{r['route__origin']} → {r['route__destination']}**: ₹{float(r['penalty']):,.0f}\n"
-
+    elif "revenue" in q or "cost" in q or "freight" in q:
         return (
             "### 💰 Financial Focus\n"
             f"- **Billed Freight**: ₹{rev:,.2f}\n"
-            f"- **Penalties**: ₹{data_points.get('total_penalties', 0):,.2f}\n\n" +
-            penalty_text +
-            "\n- **Action**: Investigate vendors executing routes with high shortage deductibles to recover margin.\n\n"
+            "- **Impact**: High delay volumes on key routes risk freight value and delivery SLAs.\n\n"
+            "- **Action**: Investigate vendors executing routes with frequent delays to recover margin.\n\n"
             "*(Note: Advanced AI financial analysis is temporarily unavailable. Showing rule-based summary.)*"
         )
     else:
@@ -343,13 +369,16 @@ def _get_data_points(qs):
     )
 
     worst_routes = list(
-        qs.filter(is_on_time=False)
-        .values("route__origin", "route__destination")
+        qs.values("route__origin", "route__destination")
         .annotate(
             count=Count("id"),
-            penalty=Coalesce(Sum("penalty"), Decimal("0"))
+            delayed=Count("id", filter=Q(is_on_time=False)),
+            d1=Count("id", filter=Q(delay_days=1)),
+            d2=Count("id", filter=Q(delay_days=2)),
+            d7plus=Count("id", filter=Q(delay_days__gt=7)),
         )
-        .order_by("-count")[:3]
+        .filter(delayed__gt=0)
+        .order_by("-delayed")[:3]
     )
 
     worst_transporters = list(

@@ -126,6 +126,46 @@ class VehicleLoginSerializer(serializers.Serializer):
         return attrs
 
 
+class CnnoLoginSerializer(serializers.Serializer):
+    """Login via CN Number (Consignment Note Number). Returns JWT tokens."""
+
+    cnno = serializers.CharField()
+
+    def validate(self, attrs):
+        from shipments.models import Shipment
+        cn = attrs["cnno"].strip()
+        if not cn:
+            raise serializers.ValidationError("CN No. is required.")
+
+        # Find shipment to identify the consignee
+        shipment = Shipment.objects.filter(shipment_id__iexact=cn).first()
+        if not shipment:
+            raise serializers.ValidationError("Invalid CN Number. Shipment not found.")
+
+        cust_name = shipment.consignee_name
+        if not cust_name:
+            raise serializers.ValidationError("This shipment has no Consignee Name associated.")
+
+        # Find or create a user for this consignee identity
+        import re
+        slug = re.sub(r'[^a-z0-9_]', '', cust_name.lower().replace(' ', '_'))[:30]
+        username = f"cust_{slug}"
+        
+        user, created = User.objects.get_or_create(username=username)
+        if created:
+            user.set_unusable_password()
+            user.first_name = cust_name[:30]
+            user.save()
+            
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        profile.role = "customer"
+        profile.customer_id = cust_name
+        profile.save()
+        
+        attrs["user"] = user
+        return attrs
+
+
 # ─── OTP Flow ────────────────────────────────────────────────────────────────
 
 class OTPRequestSerializer(serializers.Serializer):
@@ -197,6 +237,7 @@ class OTPVerifySerializer(serializers.Serializer):
         profile = UserProfile.objects.filter(phone=phone).first()
         if profile:
             user = profile.user
+            # For existing users, we don't change role/identifiers via OTP
         else:
             # Auto-create user from phone number
             username = f"user_{phone.lstrip('+')}"

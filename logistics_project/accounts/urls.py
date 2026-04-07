@@ -16,6 +16,7 @@ urlpatterns = [
     path("register/",           views.register,           name="register"),
     path("login/",              views.login_view,          name="login"),
     path("vehicle-login/",      views.vehicle_login,       name="vehicle-login"),
+    path("cnno-login/",         views.cnno_login,          name="cnno-login"),
     path("token/refresh/",       TokenRefreshView.as_view(), name="token-refresh"),
     path("me/",                 views.me_view,             name="me"),
 
