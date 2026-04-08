@@ -10,7 +10,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { fetchDriverShipments, uploadPodImages, viewPod, getInvoiceUrl } from '../api';
+import { fetchDriverShipments, uploadPodImages, viewPod, getInvoiceUrl, deletePod } from '../api';
 import NotificationBell from './NotificationBell';
 
 // ── Status map ────────────────────────────────────────────────────────────────
@@ -112,6 +112,22 @@ export default function DriverPanel() {
   // Invoice View — open in new tab
   function openInvoice(shipmentId) {
     window.open(getInvoiceUrl(shipmentId), '_blank');
+  }
+
+  // Delete POD — clear images and re-upload
+  async function handleDeletePod(id) {
+    if (!id) { alert('Shipment ID missing!'); return; }
+    if (!window.confirm('Kya aap sach mein ye photo delete karna chahte hain?')) return;
+    try {
+      console.log('Deleting POD for:', id);
+      const res = await deletePod(id);
+      setSuccessMsg(`✅ ${res.message}`);
+      setPodPreview(null);
+      load();
+      setTimeout(()=>setSuccessMsg(''), 5000);
+    } catch(e) {
+      alert('Delete fail: '+e.message);
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -256,6 +272,7 @@ export default function DriverPanel() {
       {/* POD Preview Modal */}
       {(podPreview || podLoading) && (
         <PodPreviewModal data={podPreview} loading={podLoading}
+          onDelete={(id) => handleDeletePod(id)}
           onClose={()=>{setPodPreview(null);setPodLoading(false);}} />
       )}
     </div>
@@ -319,20 +336,14 @@ function ShipmentCard({ s, onUpload, onViewPod, onViewInvoice }) {
                 </span>
               )}
             </div>
-            {/* Two buttons: View POD + View Invoice */}
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'0.5rem' }}>
+            {/* Single button: View POD (Note: Invoice removed as per user request) */}
+            <div style={{ display:'grid', gridTemplateColumns:'1fr', gap:'0.5rem' }}>
               <button onClick={onViewPod} style={{
-                padding:'0.6rem', background:`linear-gradient(135deg, ${C.teal}, ${C.tealDk})`,
+                padding:'0.65rem', background:`linear-gradient(135deg, ${C.teal}, ${C.tealDk})`,
                 color:'#fff', border:'none', borderRadius:'9px',
-                fontWeight:700, fontSize:'0.82rem', cursor:'pointer', fontFamily:'inherit',
+                fontWeight:700, fontSize:'0.9rem', cursor:'pointer', fontFamily:'inherit',
                 boxShadow:`0 3px 10px ${C.teal}30`,
               }}>📸 POD Dekho</button>
-              <button onClick={onViewInvoice} style={{
-                padding:'0.6rem', background:`linear-gradient(135deg, ${C.blue}, #2563eb)`,
-                color:'#fff', border:'none', borderRadius:'9px',
-                fontWeight:700, fontSize:'0.82rem', cursor:'pointer', fontFamily:'inherit',
-                boxShadow:`0 3px 10px ${C.blue}30`,
-              }}>📄 Invoice Dekho</button>
             </div>
           </div>
         ) : (
@@ -356,7 +367,7 @@ function ShipmentCard({ s, onUpload, onViewPod, onViewInvoice }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // POD PREVIEW MODAL — Shows uploaded images in a gallery
 // ═══════════════════════════════════════════════════════════════════════════════
-function PodPreviewModal({ data, loading, onClose }) {
+function PodPreviewModal({ data, loading, onDelete, onClose }) {
   return (
     <div style={{
       position:'fixed', inset:0, background:'rgba(0,0,0,0.6)',
@@ -381,11 +392,23 @@ function PodPreviewModal({ data, loading, onClose }) {
               </div>
             )}
           </div>
-          <button onClick={onClose} style={{
-            background:'rgba(255,255,255,0.2)', border:'none', color:'#fff',
-            borderRadius:'50%', width:'32px', height:'32px', cursor:'pointer',
-            fontSize:'1rem', display:'flex', alignItems:'center', justifyContent:'center',
-          }}>✕</button>
+          <div style={{ display:'flex', gap:'0.5rem' }}>
+            {data && (
+              <button 
+                id="delete-pod-btn"
+                onClick={() => onDelete(data.id || data.shipment_id)} 
+                style={{
+                  background:'rgba(244,63,94,0.2)', border:'1px solid rgba(244,63,94,0.5)',
+                  color:'#fff', borderRadius:'8px', padding:'0.4rem 0.75rem',
+                  fontSize:'0.75rem', fontWeight:700, cursor:'pointer',
+                }}>🗑️ Hatao</button>
+            )}
+            <button onClick={onClose} style={{
+              background:'rgba(255,255,255,0.2)', border:'none', color:'#fff',
+              borderRadius:'50%', width:'32px', height:'32px', cursor:'pointer',
+              fontSize:'1rem', display:'flex', alignItems:'center', justifyContent:'center',
+            }}>✕</button>
+          </div>
         </div>
 
         {/* Content */}

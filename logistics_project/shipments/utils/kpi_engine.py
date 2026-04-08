@@ -74,7 +74,30 @@ def get_summary_kpis(qs=None):
         "pod_compliance": round((completed_pods / total) * 100, 1) if total > 0 else 0.0,
         "revenue_at_risk": float(revenue_at_risk),
         "delay_volatility": volatility,
+        "delay_distribution": get_delay_distribution(qs),
     }
+
+
+def get_delay_distribution(qs=None):
+    """
+    Returns delay counts grouped by ranges: 1-2, 3-4, 5-7, 8+ days.
+    """
+    if qs is None:
+        qs = Shipment.objects.all()
+
+    stats = qs.filter(is_on_time=False).aggregate(
+        range_1_2=Count("id", filter=Q(delay_days__gte=1, delay_days__lte=2)),
+        range_3_4=Count("id", filter=Q(delay_days__gte=3, delay_days__lte=4)),
+        range_5_7=Count("id", filter=Q(delay_days__gte=5, delay_days__lte=7)),
+        range_8_plus=Count("id", filter=Q(delay_days__gt=7)),
+    )
+
+    return [
+        {"range": "1-2 Days", "count": stats["range_1_2"] or 0, "filter": "delayed_1_2"},
+        {"range": "3-4 Days", "count": stats["range_3_4"] or 0, "filter": "delayed_3_4"},
+        {"range": "5-7 Days", "count": stats["range_5_7"] or 0, "filter": "delayed_5_7"},
+        {"range": "7+ Days", "count": stats["range_8_plus"] or 0, "filter": "delayed_8_plus"},
+    ]
 
 
 def get_full_root_cause(qs=None):
@@ -343,3 +366,18 @@ def generate_insights(qs=None):
         )
 
     return insights
+
+def get_transporter_performance(qs=None, limit=5):
+    """
+    Top N transporters by shipment count.
+    Used for a simple bar chart.
+    """
+    if qs is None:
+        qs = Shipment.objects.all()
+
+    return list(
+        qs.exclude(transporter_name='')
+        .values("transporter_name")
+        .annotate(shipment_count=Count("id"))
+        .order_by("-shipment_count")[:limit]
+    )
