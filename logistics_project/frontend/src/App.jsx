@@ -3,7 +3,8 @@ import './index.css';
 import {
   fetchSummary, fetchRevenueTrends, fetchTopRoutes, fetchSmartInsights,
   fetchUploadHistory, fetchRootCause, fetchRisk,
-  fetchQuality, fetchDrilldown, uploadFile, fetchAIAnalysis, deleteUpload, fetchShipments
+  fetchQuality, fetchDrilldown, uploadFile, fetchAIAnalysis, deleteUpload, fetchShipments,
+  clearAllData, reprocessUpload
 } from './api';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -939,49 +940,71 @@ function Spinner({ text }) {
 function UploadView({ onUploadDone }) {
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
 
-  const handleFile = async (file) => {
-    if (!file) return; setUploading(true); setResult(null); setError(null);
-    try { const res = await uploadFile(file); setResult(res); setTimeout(() => onUploadDone(), 2500); }
-    catch (e) { setError(e.message); }
-    finally { setUploading(false); }
+  const handleFiles = async (fileList) => {
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+    setUploading(true); setResult(null); setError(null);
+    try {
+      const res = await uploadFile(files);
+      setResult(res);
+      setTimeout(() => onUploadDone(), 3000);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleStartFresh = async () => {
+    if (!window.confirm("⚠️ WARNING: This will permanently delete ALL shipment records, routes, and history. Are you sure you want to start fresh?")) return;
+    setClearing(true);
+    try {
+      await clearAllData();
+      alert("System reset successful. All data cleared.");
+      onUploadDone();
+    } catch (e) {
+      alert(`Clearing failed: ${e.message}`);
+    } finally {
+      setClearing(false);
+    }
   };
 
   return (
     <div className="upload-container">
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
+        <button className="btn btn-ghost" onClick={handleStartFresh} disabled={uploading || clearing} style={{ color: '#f87171', border: '1px solid #fecaca' }}>
+          {clearing ? '⏳ Clearing...' : '🗑 Start Fresh'}
+        </button>
+      </div>
+
       <div className={`upload-zone ${dragOver ? 'drag-over' : ''} ${uploading ? 'uploading' : ''}`}
         onDragOver={e => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)}
-        onDrop={e => { e.preventDefault(); setDragOver(false); handleFile(e.dataTransfer.files[0]); }}
+        onDrop={e => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
         onClick={() => document.getElementById('file-input').click()}>
         <div className="upload-icon">{uploading ? '⏳' : '📁'}</div>
-        <div className="upload-title">{uploading ? 'Processing your data...' : 'Drop your Excel/CSV file here'}</div>
-        <div className="upload-subtitle">Supports .xlsx, .xls, .csv (max 10MB)</div>
-        {uploading && <div className="progress-bar-container"><div className="progress-bar-fill" style={{ width: '80%' }} /></div>}
-        <input id="file-input" className="upload-input" type="file" accept=".xlsx,.xls,.csv" onChange={e => handleFile(e.target.files[0])} />
+        <div className="upload-title">{uploading ? 'Processing your data...' : 'Drop your Excel/CSV file(s) here'}</div>
+        <div className="upload-subtitle">Supports multiple .xlsx, .xls, .csv files (max 10MB each)</div>
+        {uploading && <div className="progress-bar-container"><div className="progress-bar-fill" style={{ width: '85%' }} /></div>}
+        <input id="file-input" className="upload-input" type="file" accept=".xlsx,.xls,.csv" multiple onChange={e => handleFiles(e.target.files)} />
       </div>
 
       {result && (
         <div className="upload-result success">
           <div className="upload-result-title">✅ {result.message}</div>
-          <div className="upload-stats">
-            <div className="upload-stat"><div className="upload-stat-value">{result.processed_rows}</div><div className="upload-stat-label">Processed</div></div>
-            <div className="upload-stat"><div className="upload-stat-value" style={{ color: result.error_rows > 0 ? '#f59e0b' : '#10b981' }}>{result.error_rows}</div><div className="upload-stat-label">Errors</div></div>
-            <div className="upload-stat"><div className="upload-stat-value">{result.duplicates_removed || 0}</div><div className="upload-stat-label">Duplicates</div></div>
-            <div className="upload-stat"><div className="upload-stat-value">{result.processing_time}</div><div className="upload-stat-label">Time</div></div>
-          </div>
-          {result.data_quality_score != null && (
-            <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--bg-glass)', borderRadius: 'var(--radius-sm)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-                <span style={{ fontWeight: 600 }}>Data Quality Score:</span>
-                <QualityBadge score={result.data_quality_score} />
-              </div>
-              {result.quality_issues?.length > 0 && (
-                <ul style={{ paddingLeft: '1.25rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                  {result.quality_issues.map((issue, i) => <li key={i} style={{ marginBottom: '0.3rem' }}>{issue}</li>)}
-                </ul>
-              )}
+          {result.results ? (
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+              Summary: {result.results.length} files imported.
+            </div>
+          ) : (
+            <div className="upload-stats">
+              <div className="upload-stat"><div className="upload-stat-value">{result.processed_rows}</div><div className="upload-stat-label">Processed</div></div>
+              <div className="upload-stat"><div className="upload-stat-value" style={{ color: result.error_rows > 0 ? '#f59e0b' : '#10b981' }}>{result.error_rows}</div><div className="upload-stat-label">Errors</div></div>
+              <div className="upload-stat"><div className="upload-stat-value">{result.duplicates_removed || 0}</div><div className="upload-stat-label">Duplicates</div></div>
+              <div className="upload-stat"><div className="upload-stat-value">{result.processing_time}</div><div className="upload-stat-label">Time</div></div>
             </div>
           )}
         </div>
@@ -997,6 +1020,7 @@ function UploadView({ onUploadDone }) {
 // ═══════════════════════════════════════════════════════════
 function HistoryView({ uploads, loading, onRefresh }) {
   const [deleting, setDeleting] = useState(null);
+  const [reprocessing, setReprocessing] = useState(null);
 
   const handleDelete = async (id) => {
     if (!window.confirm('Are you sure you want to delete this upload? This will also remove all associated shipment records and cannot be undone.')) return;
@@ -1011,13 +1035,26 @@ function HistoryView({ uploads, loading, onRefresh }) {
     }
   };
 
-  if (loading && !deleting) return <Spinner text="Loading upload history..." />;
+  const handleReprocess = async (id) => {
+    setReprocessing(id);
+    try {
+      await reprocessUpload(id);
+      alert("Reprocessing successful!");
+      onRefresh();
+    } catch (e) {
+      alert(`Reprocessing failed: ${e.message}`);
+    } finally {
+      setReprocessing(null);
+    }
+  };
+
+  if (loading && !deleting && !reprocessing) return <Spinner text="Loading upload history..." />;
   if (!uploads?.length) return <div className="empty-state"><div className="empty-state-icon">📋</div><div className="empty-state-title">No Uploads Yet</div><p>Upload your first shipment file to see history here.</p></div>;
 
   return (
     <div className="history-table-wrap">
       <table className="history-table">
-        <thead><tr><th>File</th><th>Status</th><th>Rows</th><th>Processed</th><th>Errors</th><th>Dups</th><th>Quality</th><th>Date</th><th>Action</th></tr></thead>
+        <thead><tr><th>File</th><th>Status</th><th>Rows</th><th>Processed</th><th>Errors</th><th>Dups</th><th>Quality</th><th>Date</th><th style={{ textAlign: 'right' }}>Actions</th></tr></thead>
         <tbody>
           {uploads.map(u => (
             <tr key={u.id}>
@@ -1028,10 +1065,20 @@ function HistoryView({ uploads, loading, onRefresh }) {
               <td>{u.duplicate_rows || 0}</td>
               <td>{u.data_quality_score != null ? <QualityBadge score={u.data_quality_score} /> : '-'}</td>
               <td>{new Date(u.uploaded_at).toLocaleString('en-IN')}</td>
-              <td>
-                <button className="btn btn-ghost" title="Delete Upload" style={{ padding: '0.4rem 0.6rem', fontSize: '1.1rem' }} onClick={() => handleDelete(u.id)} disabled={deleting === u.id}>
-                  {deleting === u.id ? '⏳' : '🗑️'}
-                </button>
+              <td style={{ textAlign: 'right' }}>
+                <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
+                  {u.original_file && (
+                    <a href={u.original_file} download className="btn btn-ghost" title="Download Original File" style={{ padding: '0.4rem 0.6rem', fontSize: '1rem', textDecoration: 'none' }}>
+                      📥
+                    </a>
+                  )}
+                  <button className="btn btn-ghost" title="Reprocess File" style={{ padding: '0.4rem 0.6rem', fontSize: '1rem' }} onClick={() => handleReprocess(u.id)} disabled={reprocessing === u.id || deleting === u.id}>
+                    {reprocessing === u.id ? '⏳' : '🔄'}
+                  </button>
+                  <button className="btn btn-ghost" title="Delete Upload" style={{ padding: '0.4rem 0.6rem', fontSize: '1rem' }} onClick={() => handleDelete(u.id)} disabled={deleting === u.id || reprocessing === u.id}>
+                    {deleting === u.id ? '⏳' : '🗑️'}
+                  </button>
+                </div>
               </td>
             </tr>
           ))}

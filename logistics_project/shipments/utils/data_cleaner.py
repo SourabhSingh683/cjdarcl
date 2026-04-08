@@ -21,62 +21,64 @@ COLUMN_ALIASES = {
     "shipment_id": [
         "cnno", "cn no", "shipment_id", "shipment number", "docket no", 
         "docket_no", "awb", "lr no", "bill no", "contarct id",
+        "consignment no", "c.n. no", "consignment id", "reference no",
     ],
     "origin": [
         "origin", "from", "source", "loading station name", "loading state",
-        "pickup", "stockyard", "stockyard/direct",
+        "pickup", "stockyard", "stockyard/direct", "dispatch from", "origin city",
     ],
     "destination": [
         "destination", "to", "dest", "delivery station name", "un loading state",
-        "delivery_location", "consignee_city", "unloading_point",
+        "delivery_location", "consignee_city", "unloading_point", "deliver to", "dest city",
     ],
     "dispatch_date": [
         "dispatch_date", "dispatch date", "cndate", "cn date", "cncreated date",
-        "lifting end date", "challan date", "lr_date",
+        "lifting end date", "challan date", "lr_date", "dispatch_dt", "booking date",
     ],
     "delivery_date": [
         "delivery_date", "delivery date", "poddate", "pod date", "reporting date",
-        "actual_delivery", "delivered_date",
+        "actual_delivery", "delivered_date", "delivered on", "pod_dt", "date of delivery",
     ],
     "expected_delivery_date": [
         "expected_delivery_date", "expected delivery date", "expected del date", "edd",
+        "delivery edd", "committed date", "sla date",
     ],
     "vehicle_type": [
-        "vehicle_type", "vehicle type", "darcl truck type", "truck type",
+        "vehicle_type", "vehicle type", "darcl truck type", "truck type", "veh type", "truck_type",
     ],
 }
 
 EXTRA_ALIASES = {
-    "vehicle_no": ["vehicle no", "truck no", "vehilce in cn", "truck_no"],
+    "vehicle_no": ["vehicle no", "truck no", "vehilce in cn", "truck_no", "veh_no", "registration no"],
     "transit_permissible": [
         "contract transit days", "transit time permissible", "transit time permissible (days)",
-        "tat_days", "sla_days", "transit time permissible (days) :",
+        "tat_days", "sla_days", "transit time permissible (days) :", "allotted days",
     ],
-    "transit_taken": ["transit time taken", "transit time taken (days)", "transit time taken (days) :"],
-    "net_weight": ["net wt", "net weight", "charge qunatity", "net wt. (in mt)"],
-    "gross_weight": ["gross wt", "gross weight", "gross wt. (in mt)"],
-    "charge_weight": ["charge qunatity", "charge weight", "charge wt", "charge wt. (in mt)"],
-    "shortage": ["shortage (mt)", "shortage", "short", "shortage/damage/remarks"],
-    "pod_weight": ["pod weight"],
-    "rate_per_mt": ["rate (pmt)", "rate", "rate_per_mt"],
-    "total_amount": ["contracted amt", "total amount", "gross amount", "value of goods"],
-    "freight_deduction": ["freight deduction", "less : freight deduction"],
-    "penalty": ["penalty", "late delivery penalty", "penalties", "less : late delivery penalty"],
-    "amount_receivable": ["amount receivable", "net amount"],
-    "grn_date": ["grn date", "receiving received date"],
-    "revenue": ["cn invoice amount", "revenue", "bill amount"],
-    "total_distance": ["total distance"],
+    "transit_taken": ["transit time taken", "transit time taken (days)", "transit time taken (days) :", "actual transit"],
+    "net_weight": ["net wt", "net weight", "charge qunatity", "net wt. (in mt)", "actual weight", "net_wt"],
+    "gross_weight": ["gross wt", "gross weight", "gross wt. (in mt)", "gross_wt", "gross qty"],
+    "charge_weight": ["charge qunatity", "charge weight", "charge wt", "charge wt. (in mt)", "billable weight"],
+    "shortage": ["shortage (mt)", "shortage", "short", "shortage/damage/remarks", "shortage qty"],
+    "pod_weight": ["pod weight", "pod_wt", "receiving weight"],
+    "rate_per_mt": ["rate (pmt)", "rate", "rate_per_mt", "freight rate"],
+    "total_amount": ["contracted amt", "total amount", "gross amount", "value of goods", "total amt", "freight amt"],
+    "freight_deduction": ["freight deduction", "less : freight deduction", "other deduction"],
+    "penalty": ["penalty", "late delivery penalty", "penalties", "less : late delivery penalty", "late fine"],
+    "amount_receivable": ["amount receivable", "net amount", "finally payable", "net_amt"],
+    "grn_date": ["grn date", "receiving received date", "grn_dt"],
+    "revenue": ["cn invoice amount", "revenue", "bill amount", "total revenue", "billing amount"],
+    "total_distance": ["total distance", "km", "distance"],
     "pod_status": ["pod status", "podstatus"],
     "billing_status": ["billing status"],
     "invoice_no": ["invoice no.", "invoice no", "invoice_no"],
     "delivery_no": ["delivery no.", "delivery no", "delivery_no"],
-    "customer_name": ["customer name", "payer", "bill to party"],
-    "transporter_name": ["contract owner", "transporter name", "vendor"],
-    "booking_region": ["cnbooking region", "booking region", "billing region"],
+    "customer_name": ["customer name", "payer", "bill to party", "client"],
+    "transporter_name": ["contract owner", "transporter name", "vendor", "carrier"],
+    "booking_region": ["cnbooking region", "booking region", "billing region", "region"],
     "contract_id": ["contract id", "contarct id", "contract number"],
-    "material_type": ["darcl material", "material type", "material tpye", "material"],
-    "consignor_name": ["consignor name", "consignor"],
-    "consignee_name": ["consignee name", "consignee"],
+    "material_type": ["darcl material", "material type", "material tpye", "material", "good type"],
+    "consignor_name": ["consignor name", "consignor", "shipper"],
+    "consignee_name": ["consignee name", "consignee", "receiver"],
 }
 
 MINIMUM_REQUIRED = {"shipment_id", "dispatch_date"}
@@ -107,7 +109,7 @@ def read_file(file_obj, file_name: str) -> pd.DataFrame:
     # Dynamic header detection: if headers are Unnamed, look for the real header row
     if any(str(c).startswith("Unnamed:") for c in df.columns[:5]):
         for i in range(min(5, len(df))):
-            row_values = df.iloc[i].astype(str).str.lower().tolist()
+            row_values = [str(v).lower() for v in df.iloc[i].tolist()]
             # If we find common header keywords in this row, promote it to columns
             if any(key in " ".join(row_values) for key in ["shipment", "cn no", "cnno", "dispatch", "date", "contract"]):
                 df.columns = df.iloc[i]

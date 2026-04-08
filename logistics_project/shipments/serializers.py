@@ -23,7 +23,7 @@ class UploadLogSerializer(serializers.ModelSerializer):
             "id", "file_name", "uploaded_at", "status",
             "total_rows", "processed_rows", "error_rows", "duplicate_rows",
             "error_log", "processing_time_ms", "duration_display",
-            "data_quality_score", "quality_issues",
+            "data_quality_score", "quality_issues", "original_file",
         ]
 
     def get_duration_display(self, obj):

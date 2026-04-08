@@ -148,11 +148,19 @@ export async function downloadInvoiceAction(shipmentId) {
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
 
-export async function uploadFile(file) {
+export async function uploadFile(files) {
   const formData = new FormData();
-  formData.append('file', file);
+  if (Array.isArray(files)) {
+    files.forEach(f => formData.append('file', f));
+  } else {
+    formData.append('file', files);
+  }
   return apiFetch('/upload/', { method: 'POST', body: formData });
 }
+
+export const clearAllData = () => apiFetch('/clear-data/', { method: 'DELETE' });
+
+export const reprocessUpload = (id) => apiFetch(`/uploads/${id}/reprocess/`, { method: 'POST' });
 
 // ─── KPIs ─────────────────────────────────────────────────────────────────────
 

@@ -80,6 +80,11 @@ class UploadLog(models.Model):
         blank=True, default="",
         help_text="JSON list of quality issues found",
     )
+    original_file = models.FileField(
+        upload_to="uploads/%Y/%m/",
+        null=True, blank=True,
+        help_text="The source data file (Excel or CSV)",
+    )
 
     class Meta:
         ordering = ["-uploaded_at"]
