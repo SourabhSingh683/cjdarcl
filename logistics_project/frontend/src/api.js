@@ -136,9 +136,11 @@ export const fetchTopRoutes      = (f = {}) => apiFetch(`/kpis/top-routes/${buil
 export const fetchDelayedShipments = (f = {}) => apiFetch(`/kpis/delayed-shipments/${buildQuery(f)}`);
 export const fetchDrilldown      = (f = {}) => apiFetch(`/kpis/drilldown/${buildQuery(f)}`);
 export const fetchComparison     = (f = {}) => apiFetch(`/kpis/comparison/${buildQuery(f)}`);
+export const fetchTransporterPerformance = (f = {}) => apiFetch(`/kpis/transporter-performance/${buildQuery(f)}`);
 
 // ─── Analytics ───────────────────────────────────────────────────────────────
 
+export const fetchOperationalIntelligence = (f = {}) => apiFetch(`/analysis/operational-intelligence/${buildQuery(f)}`);
 export const fetchRootCause  = (f = {}) => apiFetch(`/analysis/root-cause/${buildQuery(f)}`);
 export const fetchRisk       = (f = {}) => apiFetch(`/analysis/risk/${buildQuery(f)}`);
 export const fetchShortage   = (f = {}) => apiFetch(`/analysis/shortage/${buildQuery(f)}`);
@@ -152,7 +154,7 @@ export const fetchSmartInsights = (f = {}) => apiFetch(`/insights/smart/${buildQ
 // ─── History ─────────────────────────────────────────────────────────────────
 
 export const fetchUploadHistory = () => apiFetch('/uploads/');
-export const deleteUpload       = (id) => apiFetch(`/uploads/${id}/`, { method: 'DELETE' });
+export const deleteUpload       = (id) => apiFetch(`/uploads/${id}/`, { method: 'DELETE' }, true);
 
 // ─── AI Analysis (Gemini) ────────────────────────────────────────────────────
 
@@ -212,5 +214,8 @@ export const viewPod = (shipmentId) =>
 /** Get invoice URL for viewing in new tab */
 export const getInvoiceUrl = (shipmentId) =>
   `${API_BASE}/shipments/${shipmentId}/invoice/`;
+
+export const deletePod = (shipmentId) =>
+  apiFetch(`/driver/delete-pod/${shipmentId}/`, { method: 'POST' }, true);
 
 

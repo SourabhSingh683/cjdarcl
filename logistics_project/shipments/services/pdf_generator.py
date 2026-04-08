@@ -337,8 +337,8 @@ def generate_invoice(shipment_id) -> bytes:
     status_data = [
         ["POD Status", "Delivery Status", "Transit SLA (days)", "Actual Transit (days)", "Delay"],
         [
-            s.pod_status or "Pending",
-            "On Time ✓" if s.is_on_time else f"Delayed {s.delay_days}d ✗",
+            "Delivered ✓" if s.pod_status == "Uploaded" else (s.pod_status or "Pending"),
+            "Delivered ✓" if s.pod_status == "Uploaded" else ("On Time ✓" if s.is_on_time else f"Delayed {s.delay_days}d ✗"),
             str(s.transit_permissible),
             str(s.transit_taken),
             f"{s.delay_days}d" if s.delay_days > 0 else "—",

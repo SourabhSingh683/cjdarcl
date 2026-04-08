@@ -18,10 +18,11 @@ import logging
 
 from django.db import transaction
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
+from rest_framework.permissions import IsAuthenticated
 from .models import Route, UploadLog, Shipment
 from .serializers import (
     FileUploadSerializer, ShipmentSerializer, ShipmentListSerializer,
@@ -30,7 +31,7 @@ from .serializers import (
 from .utils.data_cleaner import process_file, DataCleaningError
 from .utils.kpi_engine import (
     get_summary_kpis, get_revenue_trends, get_top_routes,
-    get_delayed_shipments, generate_insights,
+    get_delayed_shipments, generate_insights, get_transporter_performance,
 )
 from .utils.quality_engine import compute_upload_quality, compute_overall_quality
 from .utils.analysis_engine import (
@@ -328,9 +329,23 @@ def kpi_delayed_shipments(request):
     return paginator.get_paginated_response(serializer.data)
 
 
+@api_view(["GET"])
+def kpi_transporter_performance(request):
+    qs = _apply_filters(Shipment.objects.all(), request.GET)
+    limit = min(int(request.GET.get("limit", 5)), 20)
+    return Response(get_transporter_performance(qs, limit=limit))
+
+
 # ═══════════════════════════════════════════════════════════
 # ANALYTICS ENDPOINTS (NEW)
 # ═══════════════════════════════════════════════════════════
+
+@api_view(["GET"])
+def operational_intelligence(request):
+    """GET /api/analysis/operational-intelligence/ — Operational alerts and analytics."""
+    from .utils.operational_engine import get_operational_intelligence
+    qs = _apply_filters(Shipment.objects.all(), request.GET)
+    return Response(get_operational_intelligence(qs))
 
 @api_view(["GET"])
 def analysis_root_cause(request):
@@ -386,6 +401,14 @@ def kpi_drilldown(request):
 
     if filter_type == "delayed":
         qs = qs.filter(is_on_time=False).order_by("-delay_days")
+    elif filter_type == "delayed_1_2":
+        qs = qs.filter(delay_days__gte=1, delay_days__lte=2).order_by("-delay_days")
+    elif filter_type == "delayed_3_4":
+        qs = qs.filter(delay_days__gte=3, delay_days__lte=4).order_by("-delay_days")
+    elif filter_type == "delayed_5_7":
+        qs = qs.filter(delay_days__gte=5, delay_days__lte=7).order_by("-delay_days")
+    elif filter_type == "delayed_8_plus":
+        qs = qs.filter(delay_days__gt=7).order_by("-delay_days")
     elif filter_type == "on_time":
         qs = qs.filter(is_on_time=True)
     elif filter_type == "shortage":
@@ -419,6 +442,7 @@ def upload_history(request):
 
 
 @api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
 def delete_upload(request, upload_id):
     try:
         upload = UploadLog.objects.get(id=upload_id)
@@ -497,10 +521,23 @@ def pod_upload(request, shipment_id):
 
     # Persist POD
     shipment.pod_file = pod_file
-    shipment.pod_uploaded_at = timezone.now()
+    now = timezone.now()
+    shipment.pod_uploaded_at = now
     shipment.pod_status = "Uploaded"
+    shipment.delivery_date = now.date()
+    shipment.status = "delivered"
     shipment.assigned_driver = request.user
-    shipment.save(update_fields=["pod_file", "pod_uploaded_at", "pod_status", "assigned_driver"])
+    
+    # Recalculate transit taken and delay
+    if shipment.dispatch_date:
+        shipment.transit_taken = (shipment.delivery_date - shipment.dispatch_date).days
+        shipment.delay_days = max(0, shipment.transit_taken - shipment.transit_permissible)
+        shipment.is_on_time = (shipment.delay_days == 0)
+
+    shipment.save(update_fields=[
+        "pod_file", "pod_uploaded_at", "pod_status", "delivery_date", 
+        "status", "assigned_driver", "transit_taken", "delay_days", "is_on_time"
+    ])
 
     # Fire signal → managers get notified
     pod_uploaded.send(
@@ -540,7 +577,7 @@ def generate_invoice_view(request, shipment_id):
         return Response({"error": "Invoice generation failed.", "details": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     response = HttpResponse(pdf_bytes, content_type="application/pdf")
-    response["Content-Disposition"] = f'attachment; filename="invoice_{shipment_id}.pdf"'
+    response["Content-Disposition"] = f'inline; filename="invoice_{shipment_id}.pdf"'
     return response
 
 
@@ -639,11 +676,22 @@ class UploadPodImagesView(APIView):
         )
         if serializer.is_valid():
             serializer.save()
+            now = timezone.now()
             shipment.pod_status = "Uploaded"
-            shipment.pod_uploaded_at = timezone.now()
+            shipment.pod_uploaded_at = now
+            shipment.delivery_date = now.date()
+            shipment.status = "delivered"
             shipment.assigned_driver = request.user
+
+            # Recalculate transit taken and delay
+            if shipment.dispatch_date:
+                shipment.transit_taken = (shipment.delivery_date - shipment.dispatch_date).days
+                shipment.delay_days = max(0, shipment.transit_taken - shipment.transit_permissible)
+                shipment.is_on_time = (shipment.delay_days == 0)
+
             shipment.save(update_fields=[
-                "pod_status", "pod_uploaded_at", "assigned_driver",
+                "pod_status", "pod_uploaded_at", "delivery_date", 
+                "status", "assigned_driver", "transit_taken", "delay_days", "is_on_time"
             ])
             logger.info(
                 f"POD photos uploaded by {request.user.username} "
@@ -788,7 +836,71 @@ class ViewPodView(APIView):
             ),
             "images": images,
             "image_count": len(images),
+            "id": shipment.id,
         })
+
+
+class DeletePodView(APIView):
+    """
+    POST /api/driver/delete-pod/<str:shipment_id>/
+    Delete all POD images and reset shipment status.
+    Used by driver if they upload a hazy photo.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, shipment_id):
+        profile = getattr(request.user, "profile", None)
+        if not profile or profile.role not in ("driver", "manager"):
+            return Response(
+                {"error": "Only drivers and managers can delete POD."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Try lookup by integer ID or string shipment_id
+        shipment = None
+        try:
+            if shipment_id.isdigit():
+                shipment = Shipment.objects.get(id=int(shipment_id))
+            else:
+                shipment = Shipment.objects.get(shipment_id=shipment_id)
+        except Shipment.DoesNotExist:
+            return Response(
+                {"error": "Shipment not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Verify driver owns this shipment
+        if profile.role == "driver":
+            vehicle = (profile.vehicle_no or "").strip().lower()
+            if vehicle and vehicle not in shipment.vehicle_no.lower():
+                return Response(
+                    {"error": "Ye shipment aapki gaadi ka nahi hai."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        # Clear all POD data
+        if shipment.pod_image_1:
+            shipment.pod_image_1.delete(save=False)
+        if shipment.pod_image_2:
+            shipment.pod_image_2.delete(save=False)
+        if shipment.pod_image_3:
+            shipment.pod_image_3.delete(save=False)
+        if shipment.pod_file:
+            shipment.pod_file.delete(save=False)
+        
+        shipment.pod_status = ""
+        shipment.pod_uploaded_at = None
+        shipment.delivery_date = None
+        shipment.status = "assigned" 
+        shipment.assigned_driver = None
+        shipment.transit_taken = 0
+        shipment.delay_days = 0
+        shipment.is_on_time = True
+        
+        shipment.save()
+        
+        logger.info(f"POD deleted by {request.user.username} for shipment {shipment.shipment_id}")
+        return Response({"message": "POD delete ho gaya. Aap naya photo bhej sakte hain. ✅"})
 
 
 

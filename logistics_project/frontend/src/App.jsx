@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import './index.css';
 import {
-  fetchSummary, fetchRevenueTrends, fetchTopRoutes, fetchSmartInsights,
+  fetchSummary, fetchRevenueTrends, fetchTopRoutes, fetchTransporterPerformance,
   fetchUploadHistory, fetchRootCause, fetchRisk,
-  fetchQuality, fetchDrilldown, uploadFile, fetchAIAnalysis, deleteUpload, fetchShipments
+  fetchQuality, fetchDrilldown, uploadFile, fetchAIAnalysis, deleteUpload, fetchShipments,
+  downloadPod, getInvoiceUrl
 } from './api';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -14,6 +15,7 @@ import LoginPage from './components/LoginPage';
 import DriverPanel from './components/DriverPanel';
 import CustomerPanel from './components/CustomerPanel';
 import NotificationBell from './components/NotificationBell';
+import OperationalIntelligence from './components/OperationalIntelligence';
 
 // ─── Constants ─────────────────────────────────────────
 const COLORS = {
@@ -35,6 +37,7 @@ const INSIGHT_ICONS = { success: '✅', warning: '⚠️', danger: '🚨', info:
 const NAV_ITEMS = [
   { key: 'dashboard', icon: '📊', label: 'Dashboard' },
   { key: 'analytics', icon: '🔍', label: 'Analytics' },
+  { key: 'intelligence', icon: '🚨', label: 'Alerts & Intel' },
   { key: 'ai', icon: '🤖', label: 'AI Copilot' },
   { key: 'upload', icon: '📁', label: 'Upload Data' },
   { key: 'history', icon: '📋', label: 'History' },
@@ -43,6 +46,7 @@ const NAV_ITEMS = [
 const PAGE_META = {
   dashboard: { title: 'Command Center', sub: 'Real-time logistics overview and key metrics' },
   analytics: { title: 'Deep Analytics', sub: 'Root cause analysis and risk prediction' },
+  intelligence: { title: 'Operational Intelligence', sub: 'Actionable alerts and historical performance' },
   ai: { title: 'AI Copilot', sub: 'Gemini-powered logistics intelligence' },
   upload: { title: 'Upload Data', sub: 'Import your shipment files' },
   history: { title: 'Upload History', sub: 'Track all your data imports' },
@@ -90,7 +94,7 @@ function ManagerDashboard({ user, onLogout }) {
   const [summary, setSummary] = useState(null);
   const [revenueTrends, setRevenueTrends] = useState([]);
   const [topRoutes, setTopRoutes] = useState([]);
-  const [insights, setInsights] = useState([]);
+  const [transporterPerformance, setTransporterPerformance] = useState([]);
   const [uploads, setUploads] = useState([]);
   const [rootCause, setRootCause] = useState(null);
   const [risk, setRisk] = useState(null);
@@ -108,13 +112,13 @@ function ManagerDashboard({ user, onLogout }) {
     setLoading(true); setError(null);
     try {
       const cnno = (f?.cnno || '').trim();
-      const [s, t, r, i, u, q] = await Promise.all([
+      const [s, t, r, tp, u, q] = await Promise.all([
         fetchSummary(f), fetchRevenueTrends({ ...f, group_by: 'day' }),
-        fetchTopRoutes(f), fetchSmartInsights(f), fetchUploadHistory(),
+        fetchTopRoutes(f), fetchTransporterPerformance({ ...f, limit: 20 }), fetchUploadHistory(),
         fetchQuality(),
       ]);
       setSummary(s); setRevenueTrends(t); setTopRoutes(r);
-      setInsights(i.insights || []); setUploads(u.results || []);
+      setTransporterPerformance(tp || []); setUploads(u.results || []);
       setQuality(q);
       if (cnno) {
         const shipmentRes = await fetchShipments({ ...f, page_size: 25 });
@@ -213,8 +217,9 @@ function ManagerDashboard({ user, onLogout }) {
         </header>
 
         <main className="main-content">
-          {tab === 'dashboard' && <DashboardView {...{ summary, revenueTrends, topRoutes, insights, loading, error, filters, setFilters, cnMatches }} onFilter={handleFilter} onClear={handleClear} onDrilldown={openDrilldown} />}
+          {tab === 'dashboard' && <DashboardView {...{ summary, revenueTrends, topRoutes, transporterPerformance, loading, error, filters, setFilters, cnMatches }} onFilter={handleFilter} onClear={handleClear} onDrilldown={openDrilldown} />}
           {tab === 'analytics' && <AnalyticsView rootCause={rootCause} risk={risk} loading={loading} error={error} summary={summary} onDrilldown={openDrilldown} />}
+          {tab === 'intelligence' && <OperationalIntelligence filters={filters} />}
           {tab === 'ai' && <AICopilotView />}
           {tab === 'upload' && <UploadView onUploadDone={() => { setRootCause(null); setRisk(null); loadDashboard(filters); setTab('dashboard'); }} />}
           {tab === 'history' && <HistoryView uploads={uploads} loading={loading} onRefresh={() => { setRootCause(null); setRisk(null); loadDashboard(filters); }} />}
@@ -250,7 +255,7 @@ function QualityBadge({ score }) {
 // ═══════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════
-function DashboardView({ summary, revenueTrends, topRoutes, insights, loading, error, filters, setFilters, cnMatches, onFilter, onClear, onDrilldown }) {
+function DashboardView({ summary, revenueTrends, topRoutes, transporterPerformance, loading, error, filters, setFilters, cnMatches, onFilter, onClear, onDrilldown }) {
   if (error) return <ErrorState msg={error} onRetry={onFilter} />;
   if (loading) return <Spinner text="Loading command center..." />;
 
@@ -282,6 +287,14 @@ function DashboardView({ summary, revenueTrends, topRoutes, insights, loading, e
     onTime: r.on_time_count, delayed: r.delayed_count, revenue: Number(r.total_revenue),
     delayPct: r.shipment_count > 0 ? Math.round((r.delayed_count / r.shipment_count) * 100) : 0,
   }));
+  const allowedTransporters = ["KULDEEP VATS", "PRAVEEN GOYAL", "VIKAS NARAYAN", "RAMESHWAR SINGH"];
+  const transporterData = transporterPerformance
+    .filter(t => allowedTransporters.includes(t.transporter_name))
+    .map(t => ({
+      name: t.transporter_name,
+      shipments: t.shipment_count,
+    }));
+
   const pieData = [
     { name: 'On Time', value: summary.on_time_count, color: COLORS.emerald },
     { name: 'Delayed', value: summary.delayed_count, color: COLORS.rose },
@@ -451,27 +464,72 @@ function DashboardView({ summary, revenueTrends, topRoutes, insights, loading, e
             </PieChart>
           </ResponsiveContainer>
         </div>
-      </div>
 
-      {/* Smart Insights */}
-      {insights.length > 0 && (
-        <div className="chart-card" style={{ marginBottom: '2rem' }}>
+        {/* Delay Distribution — Bar Chart */}
+        <div className="chart-card">
           <div className="chart-header">
             <div>
-              <div className="chart-title">🧠 Smart Insights</div>
-              <div className="chart-subtitle">Data-driven observations from your shipments</div>
+              <div className="chart-title">⏱️ Delay Distribution</div>
+              <div className="chart-subtitle">Count of shipments by delay duration</div>
             </div>
           </div>
-          <ul className="insights-list">
-            {insights.map((item, i) => (
-              <li key={i} className="insight-item">
-                <span className="insight-icon">{INSIGHT_ICONS[item.type] || '💡'}</span>
-                <span>{typeof item === 'string' ? item : item.text}</span>
-              </li>
-            ))}
-          </ul>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={summary.delay_distribution || []} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+              <XAxis dataKey="range" stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} />
+              <YAxis stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} />
+              <Tooltip {...TOOLTIP_STYLE} cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                formatter={(value) => {
+                  const total = (summary.delay_distribution || []).reduce((sum, item) => sum + item.count, 0);
+                  const pct = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
+                  return [`${value} (${pct}%)`, 'Count'];
+                }} />
+              <Bar dataKey="count" radius={[4, 4, 0, 0]} onClick={(data) => onDrilldown(data.filter)} style={{ cursor: 'pointer' }}>
+                {(summary.delay_distribution || []).map((entry, index) => {
+                  const colors = [COLORS.amber, COLORS.amber, COLORS.rose, COLORS.rose];
+                  return <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />;
+                })}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          <div style={{ marginTop: '0.5rem', textAlign: 'center', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+            💡 Click any bar to view specific vehicles
+          </div>
         </div>
-      )}
+
+        {/* Transporter Performance — Column Chart (Now side-by-side) */}
+        {transporterData.length > 0 && (
+          <div className="chart-card">
+            <div className="chart-header">
+              <div>
+                <div className="chart-title">🚚 Transporter Performance</div>
+                <div className="chart-subtitle">Top 4 transporters by shipment volume delivered</div>
+              </div>
+              <div className="chart-legend">
+                <div className="legend-item"><div className="legend-dot" style={{ background: COLORS.blue }} />Shipments Delivered</div>
+              </div>
+            </div>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={transporterData} barCategoryGap="25%">
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <XAxis dataKey="name" stroke="#6b7280" fontSize={10} tickLine={false} axisLine={false} />
+                <YAxis stroke="#6b7280" fontSize={11} tickLine={false} axisLine={false} />
+                <Tooltip {...TOOLTIP_STYLE} cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                  formatter={(value) => {
+                    const total = summary.total_shipments || 0;
+                    const pct = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
+                    return [`${value} (${pct}%)`, 'Orders Delivered'];
+                  }} />
+                <Bar dataKey="shipments" fill={COLORS.blue} radius={[4, 4, 0, 0]} name="Orders Delivered">
+                  {transporterData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={Object.values(COLORS)[index % 6]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
     </>
   );
 }
@@ -818,7 +876,6 @@ function FormattedAI({ text }) {
         if (line.startsWith('### ')) return <h3 key={i} style={{ marginTop: '1rem', marginBottom: '0.4rem', fontSize: '1.05rem', color: 'var(--text-primary)' }}>{parseInline(line.replace('### ', ''))}</h3>;
         if (line.startsWith('## ')) return <h2 key={i} style={{ marginTop: '1.2rem', marginBottom: '0.5rem', fontSize: '1.15rem', color: 'var(--text-primary)' }}>{parseInline(line.replace('## ', ''))}</h2>;
         if (line.startsWith('- ') || line.startsWith('* ')) return <div key={i} style={{ paddingLeft: '0.5rem', marginBottom: '0.3rem', display: 'flex' }}><span style={{ marginRight: '0.5rem', color: 'var(--accent-blue)' }}>•</span><span>{parseInline(line.replace(/^[-*]\s/, ''))}</span></div>;
-        if (line.trim() === '') return <div key={i} style={{ height: '0.5rem' }} />;
         return <p key={i} style={{ marginBottom: '0.4rem' }}>{parseInline(line)}</p>;
       })}
     </div>
@@ -830,7 +887,17 @@ function FormattedAI({ text }) {
 // Drilldown Modal
 // ═══════════════════════════════════════════════════════════
 function DrilldownModal({ data, type, onClose }) {
-  const titles = { all: 'All Shipments', delayed: 'Delayed Shipments', on_time: 'On-Time Shipments', shortage: 'Shortage Shipments', penalty: 'Penalized Shipments' };
+  const titles = {
+    all: 'All Shipments',
+    delayed: 'Delayed Shipments',
+    delayed_1_2: '1-2 Days Delayed Shipments',
+    delayed_3_4: '3-4 Days Delayed Shipments',
+    delayed_5_7: '5-7 Days Delayed Shipments',
+    delayed_8_plus: '7+ Days Delayed Shipments',
+    on_time: 'On-Time Shipments',
+    shortage: 'Shortage Shipments',
+    penalty: 'Penalized Shipments'
+  };
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '1400px', width: '95%' }}>
@@ -853,6 +920,7 @@ function DrilldownModal({ data, type, onClose }) {
                 <th>Vehicle</th>
                 {type === 'shortage' ? <th>Shortage</th> : <th>Delay</th>}
                 <th>Freight Value</th>
+                <th style={{ textAlign: 'center' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -873,6 +941,27 @@ function DrilldownModal({ data, type, onClose }) {
                     <td style={{ color: s.delay_days > 0 ? COLORS.rose : COLORS.emerald, fontWeight: 600 }}>{s.delay_days > 0 ? `+${s.delay_days}d` : 'On time'}</td>
                   )}
                   <td>₹{Number(s.revenue).toLocaleString('en-IN')}</td>
+                  <td>
+                    <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'center' }}>
+                      <button 
+                        className="btn btn-ghost" 
+                        title={s.pod_status === 'Uploaded' ? "Download POD" : "POD not available"} 
+                        style={{ padding: '0.2rem 0.4rem', fontSize: '1rem', opacity: s.pod_status === 'Uploaded' ? 1 : 0.4 }} 
+                        onClick={() => s.pod_status === 'Uploaded' && downloadPod(s.shipment_id)}
+                        disabled={s.pod_status !== 'Uploaded'}
+                      >
+                        {s.pod_status === 'Uploaded' ? '⬇️' : '⚪'}
+                      </button>
+                      <button 
+                        className="btn btn-ghost" 
+                        title="Download Invoice" 
+                        style={{ padding: '0.2rem 0.4rem', fontSize: '1rem' }} 
+                        onClick={() => window.open(getInvoiceUrl(s.shipment_id), '_blank')}
+                      >
+                        📄
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

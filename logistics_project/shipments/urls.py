@@ -16,8 +16,10 @@ urlpatterns = [
     path("kpis/delayed-shipments/", views.kpi_delayed_shipments, name="kpi-delayed-shipments"),
     path("kpis/drilldown/", views.kpi_drilldown, name="kpi-drilldown"),
     path("kpis/comparison/", views.period_comparison, name="kpi-comparison"),
+    path("kpis/transporter-performance/", views.kpi_transporter_performance, name="kpi-transporter-performance"),
 
     # Analytics (NEW)
+    path("analysis/operational-intelligence/", views.operational_intelligence, name="analysis-operational-intelligence"),
     path("analysis/root-cause/", views.analysis_root_cause, name="analysis-root-cause"),
     path("analysis/risk/", views.analysis_risk, name="analysis-risk"),
     path("analysis/shortage/", views.analysis_shortage, name="analysis-shortage"),
@@ -48,4 +50,5 @@ urlpatterns = [
     # ── POD Download + View (Driver + Manager) ──────────────────
     path("download-pod/<str:shipment_id>/", views.DownloadPodView.as_view(), name="download-pod"),
     path("view-pod/<str:shipment_id>/", views.ViewPodView.as_view(), name="view-pod"),
+    path("driver/delete-pod/<str:shipment_id>/", views.DeletePodView.as_view(), name="delete-pod"),
 ]
