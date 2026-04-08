@@ -57,9 +57,9 @@ const ROLES = [
   },
   {
     role: 'customer',
-    label: 'Customer',
+    label: 'Consignee',
     icon: '📦',
-    username: 'customer1',
+    username: 'consignee1',
     password: 'Darcl@1234',
     color: C.violet,
     bg: C.violetGL,
@@ -78,25 +78,44 @@ const inputStyle = {
 };
 
 export default function LoginPage({ onLoginSuccess }) {
-  const { login, loginVehicle, requestOTP, loginOTP } = useAuth();
+  const { login, loginVehicle, loginCnno, requestOTP, loginOTP, signup } = useAuth();
 
+  const [selRole, setSelRole]   = useState('manager'); // NEW: track selected role button
+  const [isSignup, setIsSignup] = useState(false);     // NEW: signup mode toggle
+  
   const [mode, setMode]         = useState('password');
   const [vehicleNo, setVehicleNo] = useState('');
+  const [cnno, setCnno]         = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [phone, setPhone]       = useState('');
+  const [fullName, setFullName] = useState('');       // NEW: for signup
   const [otpStep, setOtpStep]   = useState(1);
   const [otpCode, setOtpCode]   = useState('');
   const [demoOtp, setDemoOtp]   = useState('');
   const [loading, setLoading]   = useState(false);
   const [err, setErr]           = useState('');
+  const [msg, setMsg]           = useState('');       // Success messages
 
   // ── Quick role select ──────────────────────────────────────────────────────
   function prefillRole(r) {
-    setMode('password');
-    setUsername(r.username);
-    setPassword(r.password);
-    setErr('');
+    setSelRole(r.role);
+    setErr(''); setMsg('');
+    setIsSignup(false);
+    
+    // Auto-select first available tab for this role
+    const tabs = getTabsForRole(r.role);
+    setMode(tabs[0][0]);
+
+    setUsername(r.username || '');
+    setPassword(r.password || '');
+  }
+
+  function getTabsForRole(role) {
+    if (role === 'manager') return [['password', '🔑 Pass'], ['otp', '📱 OTP']];
+    if (role === 'driver')  return [['vehicle', '🚚 Gaadi No'], ['otp', '📱 OTP']];
+    if (role === 'customer') return [['cnno', '📋 CN No'], ['otp', '📱 OTP']];
+    return [['password', '🔑 Pass'], ['otp', '📱 OTP']];
   }
 
   // ── Password login ─────────────────────────────────────────────────────────
@@ -154,6 +173,46 @@ export default function LoginPage({ onLoginSuccess }) {
       onLoginSuccess(user.role);
     } catch (ex) {
       setErr(ex.message || 'Login failed. Gaadi number not found.');
+    }
+    setLoading(false);
+  }
+
+  // ── CN login ───────────────────────────────────────────────────────────────
+  async function handleCnnoLogin(e) {
+    e.preventDefault();
+    if (!cnno) { setErr('Please enter CN Number.'); return; }
+    setLoading(true); setErr('');
+    try {
+      const user = await loginCnno(cnno);
+      onLoginSuccess(user.role);
+    } catch (ex) {
+      setErr(ex.message || 'Login failed. CN number not found.');
+    }
+    setLoading(false);
+  }
+
+  // ── Signup ───────────────────────────────────────────────────────────────
+  async function handleSignup(e) {
+    e.preventDefault();
+    if (!username || !password || !fullName || !phone) {
+      setErr('Saari jaankari bharna zaroori hai.');
+      return;
+    }
+    setLoading(true); setErr(''); setMsg('');
+    try {
+      await signup({
+        username, password, phone,
+        first_name: fullName.split(' ')[0],
+        last_name: fullName.split(' ').slice(1).join(' '),
+        role: selRole,
+        vehicle_no: selRole === 'driver' ? vehicleNo : '',
+        customer_id: selRole === 'customer' ? cnno : '',
+      });
+      setMsg('Account ban gaya! Ab login kijiye.');
+      setIsSignup(false);
+      setMode('password');
+    } catch (ex) {
+      setErr(ex.message || 'Registration failed.');
     }
     setLoading(false);
   }
@@ -218,18 +277,18 @@ export default function LoginPage({ onLoginSuccess }) {
                   title={r.desc}
                   style={{
                     padding: '0.75rem 0.5rem',
-                    background: username === r.username ? r.bg : '#f8fafc',
-                    border: `1.5px solid ${username === r.username ? r.color : C.border}`,
+                    background: selRole === r.role ? r.bg : '#f8fafc',
+                    border: `1.5px solid ${selRole === r.role ? r.color : C.border}`,
                     borderRadius: '10px',
                     cursor: 'pointer', textAlign: 'center', fontFamily: 'inherit',
                     transition: 'all 0.2s',
-                    boxShadow: username === r.username ? `0 0 0 3px ${r.color}18` : 'none',
+                    boxShadow: selRole === r.role ? `0 0 0 3px ${r.color}18` : 'none',
                   }}
                 >
                   <div style={{ fontSize: '1.4rem', marginBottom: '0.3rem' }}>{r.icon}</div>
                   <div style={{
                     fontSize: '0.72rem', fontWeight: 700,
-                    color: username === r.username ? r.color : C.sub,
+                    color: selRole === r.role ? r.color : C.sub,
                     lineHeight: 1.2,
                   }}>
                     {r.label}
@@ -238,8 +297,8 @@ export default function LoginPage({ onLoginSuccess }) {
               ))}
             </div>
             {/* Role description */}
-            {username && (() => {
-              const found = ROLES.find(r => r.username === username);
+            {(() => {
+              const found = ROLES.find(r => r.role === selRole);
               return found ? (
                 <div style={{
                   marginTop: '0.6rem', padding: '0.5rem 0.75rem',
@@ -252,29 +311,44 @@ export default function LoginPage({ onLoginSuccess }) {
             })()}
           </div>
 
-          {/* ── Mode toggle ───────────────────────────────────────────────── */}
-          <div style={{
-            display: 'grid', gridTemplateColumns: '1fr 1fr',
-            background: '#f1f5f9', borderRadius: '8px',
-            padding: '3px', marginBottom: '1.5rem', gap: '3px',
-          }}>
-            {[['password', '🔑 Password'], ['vehicle', '🚚 Gaadi No.'], ['otp', '📱 Mobile OTP']].map(([m, label]) => (
-              <button key={m}
-                onClick={() => { setMode(m); setErr(''); resetOtp(); }}
-                style={{
-                  padding: '0.55rem', borderRadius: '6px', border: 'none',
-                  background: mode === m ? C.card : 'transparent',
-                  color: mode === m ? C.teal : C.muted,
-                  fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer',
-                  fontFamily: 'inherit',
-                  boxShadow: mode === m ? C.shadow : 'none',
-                  transition: 'all 0.2s',
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          {/* ── Tabs (Sign In mode) ───────────────────────────────────────── */}
+          {!isSignup && (
+            <div style={{
+              display: 'flex',
+              background: '#f1f5f9', borderRadius: '8px',
+              padding: '4px', marginBottom: '1.5rem', gap: '4px',
+            }}>
+              {getTabsForRole(selRole).map(([m, label]) => (
+                <button key={m}
+                  onClick={() => { setMode(m); setErr(''); resetOtp(); }}
+                  style={{
+                    flex: 1, padding: '0.5rem', borderRadius: '6px', border: 'none',
+                    background: mode === m ? C.card : 'transparent',
+                    color: mode === m ? C.teal : C.muted,
+                    fontWeight: 700, fontSize: '0.78rem', cursor: 'pointer',
+                    fontFamily: 'inherit',
+                    boxShadow: mode === m ? C.shadow : 'none',
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {isSignup && (
+            <div style={{ marginBottom: '1.5rem', textAlign: 'center' }}>
+              <div style={{ fontSize: '1.25rem', fontWeight: 800, color: C.teal }}>Sign Up as {selRole}</div>
+              <div style={{ fontSize: '0.75rem', color: C.muted }}>Create a new account</div>
+            </div>
+          )}
+
+          {msg && <div style={{
+            background: '#ecfdf5', color: '#047857', padding: '0.75rem', 
+            borderRadius: '8px', marginBottom: '1rem', fontSize: '0.85rem', fontWeight: 600,
+            border: '1px solid #10b98130'
+          }}>✅ {msg}</div>}
 
           {/* ── Password form ─────────────────────────────────────────────── */}
           {mode === 'password' && (
@@ -400,6 +474,92 @@ export default function LoginPage({ onLoginSuccess }) {
               </button>
             </form>
           )}
+          {/* ── CN Login form ──────────────────────────────────────────────── */}
+          {!isSignup && mode === 'cnno' && (
+            <form onSubmit={handleCnnoLogin}>
+              <label style={{ display: 'block', marginBottom: '1.25rem' }}>
+                <FieldLabel>Consignment Number (CN No.)</FieldLabel>
+                <input
+                  id="login-cnno"
+                  style={inputStyle}
+                  placeholder="e.g. JMS39A04249"
+                  value={cnno}
+                  onChange={e => setCnno(e.target.value)}
+                />
+                <div style={{ fontSize: '0.72rem', color: C.muted, marginTop: '0.4rem' }}>
+                  Consignees: Enter any valid CN number from your shipment to login.
+                </div>
+              </label>
+              {err && <ErrorBox msg={err} />}
+              <button
+                id="cnno-login-submit"
+                type="submit"
+                disabled={loading}
+                style={primaryBtn(C.violet, '#6d28d9', loading)}
+              >
+                {loading ? '…Searching' : '📋 Login as Consignee →'}
+              </button>
+            </form>
+          )}
+
+          {/* ── Signup Form ────────────────────────────────────────────────── */}
+          {isSignup && (
+            <form onSubmit={handleSignup}>
+              <label style={{ display: 'block', marginBottom: '1rem' }}>
+                <FieldLabel>Full Name</FieldLabel>
+                <input style={inputStyle} placeholder="John Doe" value={fullName} onChange={e => setFullName(e.target.value)} />
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                <label>
+                  <FieldLabel>Username</FieldLabel>
+                  <input style={inputStyle} placeholder="johndoe" value={username} onChange={e => setUsername(e.target.value)} />
+                </label>
+                <label>
+                  <FieldLabel>Phone No.</FieldLabel>
+                  <input style={inputStyle} placeholder="+91..." value={phone} onChange={e => setPhone(e.target.value)} />
+                </label>
+              </div>
+              <label style={{ display: 'block', marginBottom: '1rem' }}>
+                <FieldLabel>Password</FieldLabel>
+                <input type="password" style={inputStyle} placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} />
+              </label>
+              
+              {selRole === 'driver' && (
+                <label style={{ display: 'block', marginBottom: '1rem' }}>
+                  <FieldLabel>Gaadi No. (Assigned)</FieldLabel>
+                  <input style={inputStyle} placeholder="HR26-...." value={vehicleNo} onChange={e => setVehicleNo(e.target.value)} />
+                </label>
+              )}
+              {selRole === 'customer' && (
+                <label style={{ display: 'block', marginBottom: '1rem' }}>
+                  <FieldLabel>Consignee Name</FieldLabel>
+                  <input style={inputStyle} placeholder="Firm Name" value={cnno} onChange={e => setCnno(e.target.value)} />
+                  <div style={{ fontSize: '0.7rem', color: C.muted, marginTop: '0.3rem' }}>* Matches Name in Shipment Records</div>
+                </label>
+              )}
+
+              {err && <ErrorBox msg={err} />}
+              <button type="submit" disabled={loading} style={primaryBtn(C.teal, C.tealDk, loading)}>
+                {loading ? '…Creating Account' : 'Create Account ✨'}
+              </button>
+            </form>
+          )}
+
+          {/* Toggle Login/Signup */}
+          <div style={{ marginTop: '1.5rem', textAlign: 'center', borderTop: `1px solid ${C.border}`, paddingTop: '1.25rem' }}>
+             {isSignup ? (
+               <button onClick={() => { setIsSignup(false); setErr(''); setMsg(''); }} 
+                 style={{ background: 'none', border: 'none', color: C.teal, fontWeight: 700, cursor: 'pointer', fontSize: '0.85rem' }}>
+                 Already have an account? Sign In
+               </button>
+             ) : (
+               <button onClick={() => { setIsSignup(true); setErr(''); setMsg(''); }}
+                 style={{ background: 'none', border: 'none', color: C.teal, fontWeight: 700, cursor: 'pointer', fontSize: '0.85rem' }}>
+                 New here? Create an Account
+               </button>
+             )}
+          </div>
+
         </div>
 
         {/* Footer */}

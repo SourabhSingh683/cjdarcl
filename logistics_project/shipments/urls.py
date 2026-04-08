@@ -34,7 +34,9 @@ urlpatterns = [
     # Upload history & shipments
     path("uploads/", views.upload_history, name="upload-history"),
     path("uploads/<int:upload_id>/", views.delete_upload, name="delete-upload"),
+    path("uploads/<int:upload_id>/reprocess/", views.reprocess_upload, name="reprocess-upload"),
     path("shipments/", views.shipment_list, name="shipment-list"),
+    path("clear-data/", views.clear_all_data, name="clear-all-data"),
 
     # POD upload & Invoice generation
     path("shipments/<str:shipment_id>/pod/", views.pod_upload, name="pod-upload"),

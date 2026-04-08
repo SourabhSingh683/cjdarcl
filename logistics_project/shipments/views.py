@@ -63,7 +63,8 @@ def _filter_by_role(qs, request):
         return qs.filter(vehicle_no__icontains=vehicle) if vehicle else qs.none()
     if profile.role == "customer":
         cust = profile.customer_id.strip()
-        return qs.filter(customer_name__icontains=cust) if cust else qs.none()
+        # Consignee-based filtering
+        return qs.filter(consignee_name__icontains=cust) if cust else qs.none()
     return qs.none()
 
 
@@ -111,20 +112,57 @@ class StandardPagination(PageNumberPagination):
 
 @api_view(["POST"])
 def upload_file(request):
-    """POST /api/upload/ — Upload Excel/CSV with full processing + quality scoring."""
-    serializer = FileUploadSerializer(data=request.data)
-    if not serializer.is_valid():
-        return Response(
-            {"error": "Invalid file", "details": serializer.errors},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    """POST /api/upload/ — Upload one or more Excel/CSV files with full processing."""
+    # We support both 'file' (single) and 'files' (multiple)
+    files = request.FILES.getlist("file")
+    if not files:
+        files = request.FILES.getlist("files")
+    
+    if not files:
+        return Response({"error": "No files provided"}, status=status.HTTP_400_BAD_REQUEST)
 
-    uploaded_file = serializer.validated_data["file"]
+    results = []
+    for uploaded_file in files:
+        try:
+            result = _process_single_file(uploaded_file)
+            results.append(result)
+        except Exception as e:
+            logger.exception(f"Crash in upload loop for {uploaded_file.name}")
+            results.append({
+                "file_name": uploaded_file.name,
+                "error": "Internal processor crash",
+                "details": str(e)
+            })
+
+    # Return 201 if all good, or 207 Multi-Status if there are mixed results
+    has_error = any("error" in r for r in results)
+    status_code = status.HTTP_207_MULTI_STATUS if (has_error and len(results) > 1) else status.HTTP_201_CREATED
+    
+    if len(results) == 1:
+        return Response(results[0], status=status_code)
+    
+    return Response({
+        "message": "Processing complete",
+        "results": results
+    }, status=status_code)
+
+
+def _process_single_file(uploaded_file):
+    """Helper to process a single uploaded file and return the result dict."""
     file_name = uploaded_file.name
+    # Ensure file pointer is at start
+    if hasattr(uploaded_file, "seek"):
+        uploaded_file.seek(0)
 
     upload_log = UploadLog.objects.create(
         file_name=file_name, status=UploadLog.Status.PROCESSING,
+        original_file=uploaded_file
     )
+    # ⚠️ CRITICAL: UploadLog creation reads the whole file to save it.
+    # We must seek back to 0 so process_file doesn't see an empty file.
+    if hasattr(uploaded_file, "seek"):
+        uploaded_file.seek(0)
+    
     start_time = time.time()
 
     try:
@@ -149,7 +187,7 @@ def upload_file(request):
         upload_log.quality_issues = json.dumps(quality["issues"])
         upload_log.save()
 
-        return Response({
+        return {
             "message": "File processed successfully",
             "upload_id": upload_log.id,
             "file_name": file_name,
@@ -161,8 +199,7 @@ def upload_file(request):
             "status": upload_log.status,
             "data_quality_score": quality["data_quality_score"],
             "quality_issues": quality["issues"],
-            "errors": errors[:20],
-        }, status=status.HTTP_201_CREATED)
+        }
 
     except DataCleaningError as e:
         elapsed_ms = int((time.time() - start_time) * 1000)
@@ -170,10 +207,7 @@ def upload_file(request):
         upload_log.error_log = json.dumps({"fatal": str(e)})
         upload_log.processing_time_ms = elapsed_ms
         upload_log.save()
-        return Response(
-            {"error": "File processing failed", "details": str(e)},
-            status=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        )
+        return {"file_name": file_name, "error": "Cleaning failed", "details": str(e)}
     except Exception as e:
         elapsed_ms = int((time.time() - start_time) * 1000)
         upload_log.status = UploadLog.Status.FAILED
@@ -181,10 +215,60 @@ def upload_file(request):
         upload_log.processing_time_ms = elapsed_ms
         upload_log.save()
         logger.exception(f"Unexpected error processing {file_name}")
-        return Response(
-            {"error": "An unexpected error occurred", "details": str(e)},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        return {"file_name": file_name, "error": "Unexpected error", "details": str(e)}
+
+
+@api_view(["DELETE"])
+def clear_all_data(request):
+    """DELETE /api/clear-data/ — Truncate all shipment data."""
+    with transaction.atomic():
+        Shipment.objects.all().delete()
+        Route.objects.all().delete()
+    return Response({"message": "Dashboard data cleared successfully, history preserved."}, status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+def reprocess_upload(request, upload_id):
+    """POST /api/uploads/<id>/reprocess/ — Re-run processing on a file from history."""
+    try:
+        upload_log = UploadLog.objects.get(id=upload_id)
+        if not upload_log.original_file:
+            return Response({"error": "Original file not found for this upload."}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Deleting old shipments associated with this upload
+        Shipment.objects.filter(upload=upload_log).delete()
+        
+        # Process the file again — ensure it's open and reset
+        file_obj = upload_log.original_file
+        file_obj.open("rb")
+        file_obj.seek(0)
+        
+        clean_df, errors, dup_count = process_file(file_obj, upload_log.file_name)
+        _bulk_insert_shipments(clean_df, upload_log)
+
+        upload_log.total_rows = len(clean_df) + len(errors) + dup_count
+        upload_log.processed_rows = len(clean_df)
+        upload_log.error_rows = len(errors)
+        upload_log.duplicate_rows = dup_count
+        upload_log.error_log = json.dumps(errors[:100], default=str)
+        upload_log.status = (
+            UploadLog.Status.COMPLETED if not errors else UploadLog.Status.PARTIAL
         )
+        upload_log.save()
+
+        # Re-compute quality
+        quality = compute_upload_quality(upload_log)
+        upload_log.data_quality_score = quality["data_quality_score"]
+        upload_log.quality_issues = json.dumps(quality["issues"])
+        upload_log.save()
+
+        return Response({"message": "Reprocessing complete", "status": upload_log.status}, status=status.HTTP_200_OK)
+    
+    except UploadLog.DoesNotExist:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.exception(f"Reprocessing failed for upload {upload_id}")
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @transaction.atomic
@@ -437,7 +521,7 @@ def upload_history(request):
     uploads = UploadLog.objects.all()
     paginator = StandardPagination()
     page = paginator.paginate_queryset(uploads, request)
-    serializer = UploadLogSerializer(page, many=True)
+    serializer = UploadLogSerializer(page, many=True, context={"request": request})
     return paginator.get_paginated_response(serializer.data)
 
 
@@ -569,7 +653,15 @@ def generate_invoice_view(request, shipment_id):
     from shipments.services.pdf_generator import generate_invoice
 
     try:
-        pdf_bytes = generate_invoice(shipment_id)
+        # Detect role for conditional financial data visibility.
+        # Defaults to 'customer' (restricted) if unauthenticated or no profile.
+        role = "customer"
+        if request.user.is_authenticated and hasattr(request.user, "profile"):
+            role = request.user.profile.role
+        
+        hide_financials = (role != "manager") # Only Managers see full details
+        
+        pdf_bytes = generate_invoice(shipment_id, hide_financials=hide_financials)
     except Shipment.DoesNotExist:
         return Response({"error": "Shipment not found."}, status=status.HTTP_404_NOT_FOUND)
     except Exception as exc:

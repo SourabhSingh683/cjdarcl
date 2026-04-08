@@ -28,6 +28,7 @@ from .serializers import (
     RegisterSerializer,
     LoginSerializer,
     VehicleLoginSerializer,
+    CnnoLoginSerializer,
     OTPRequestSerializer,
     OTPVerifySerializer,
     MeSerializer,
@@ -94,6 +95,33 @@ def login_view(request):
 def vehicle_login(request):
     """POST /api/auth/vehicle-login/ — Driver login via gaadi number."""
     serializer = VehicleLoginSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    user = serializer.validated_data["user"]
+    from rest_framework_simplejwt.tokens import RefreshToken
+    refresh = RefreshToken.for_user(user)
+
+    profile = getattr(user, "profile", None)
+    return Response(
+        {
+            "access": str(refresh.access_token),
+            "refresh": str(refresh),
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "full_name": user.get_full_name() or user.username,
+                "role": profile.role if profile else "unknown",
+            },
+        }
+    )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def cnno_login(request):
+    """POST /api/auth/cnno-login/ — Customer login via CN Number."""
+    serializer = CnnoLoginSerializer(data=request.data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

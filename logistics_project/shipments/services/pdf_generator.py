@@ -125,12 +125,13 @@ def _styles():
     }
 
 
-def generate_invoice(shipment_id) -> bytes:
+def generate_invoice(shipment_id, hide_financials=False) -> bytes:
     """
     Generate a professional A4 invoice PDF for the given shipment.
 
     Args:
         shipment_id: The Shipment DB primary key (int) or shipment_id string.
+        hide_financials: If True, sensitive monetary fields (rate, amount, deductions) are omitted.
 
     Returns:
         Raw PDF bytes ready to stream in an HTTP response.
@@ -258,22 +259,39 @@ def generate_invoice(shipment_id) -> bytes:
     story.append(Spacer(1, 5 * mm))
 
     # ── CARGO + FREIGHT TABLE ─────────────────────────────────────────────────
-    story.append(Paragraph("CARGO & FREIGHT CHARGES", S["section_head"]))
-    story.append(Spacer(1, 1 * mm))
+    if hide_financials:
+        # Non-financial version: only cargo description and weights
+        story.append(Paragraph("CARGO / CONSIGNMENT DETAILS", S["section_head"]))
+        story.append(Spacer(1, 1 * mm))
+        cargo_data = [
+            ["#", "Description", "Gross Wt (MT)", "Net Wt (MT)", "Chargeable Wt (MT)"],
+            [
+                "1",
+                s.material_type or "General Cargo",
+                f"{float(s.gross_weight):.3f}",
+                f"{float(s.net_weight):.3f}",
+                f"{float(s.charge_weight):.3f}",
+            ],
+        ]
+        col_widths = [W * 0.05, W * 0.45, W * 0.16, W * 0.16, W * 0.18]
+    else:
+        # Full financial version
+        story.append(Paragraph("CARGO & FREIGHT CHARGES", S["section_head"]))
+        story.append(Spacer(1, 1 * mm))
+        cargo_data = [
+            ["#", "Description", "Gross Wt (MT)", "Net Wt (MT)", "Chargeable Wt (MT)", "Rate / MT (₹)", "Amount (₹)"],
+            [
+                "1",
+                s.material_type or "General Cargo",
+                f"{float(s.gross_weight):.3f}",
+                f"{float(s.net_weight):.3f}",
+                f"{float(s.charge_weight):.3f}",
+                f"₹{float(s.rate_per_mt):,.2f}",
+                f"₹{float(s.total_amount):,.2f}",
+            ],
+        ]
+        col_widths = [W * 0.05, W * 0.25, W * 0.12, W * 0.12, W * 0.14, W * 0.14, W * 0.18]
 
-    cargo_data = [
-        ["#", "Description", "Gross Wt (MT)", "Net Wt (MT)", "Chargeable Wt (MT)", "Rate / MT (₹)", "Amount (₹)"],
-        [
-            "1",
-            s.material_type or "General Cargo",
-            f"{float(s.gross_weight):.3f}",
-            f"{float(s.net_weight):.3f}",
-            f"{float(s.charge_weight):.3f}",
-            f"₹{float(s.rate_per_mt):,.2f}",
-            f"₹{float(s.total_amount):,.2f}",
-        ],
-    ]
-    col_widths = [W * 0.05, W * 0.25, W * 0.12, W * 0.12, W * 0.14, W * 0.14, W * 0.18]
     cargo_table = Table(cargo_data, colWidths=col_widths)
     cargo_table.setStyle(TableStyle([
         ("BACKGROUND",    (0, 0), (-1, 0), BRAND_TEAL),
@@ -293,45 +311,46 @@ def generate_invoice(shipment_id) -> bytes:
     story.append(Spacer(1, 4 * mm))
 
     # ── FINANCIAL SUMMARY ─────────────────────────────────────────────────────
-    finance_data = [
-        ["Gross Freight Amount",        f"₹{float(s.total_amount):,.2f}"],
-        ["Freight Deduction",           f"(₹{float(s.freight_deduction):,.2f})"],
-        ["Shortage Penalty",            f"(₹{float(s.penalty):,.2f})"],
-        ["GST @ 18% (indicative)",      f"₹{float(s.total_amount) * 0.18:,.2f}"],
-    ]
-    net_receivable = float(s.amount_receivable)
+    if not hide_financials:
+        finance_data = [
+            ["Gross Freight Amount",        f"₹{float(s.total_amount):,.2f}"],
+            ["Freight Deduction",           f"(₹{float(s.freight_deduction):,.2f})"],
+            ["Shortage Penalty",            f"(₹{float(s.penalty):,.2f})"],
+            ["GST @ 18% (indicative)",      f"₹{float(s.total_amount) * 0.18:,.2f}"],
+        ]
+        net_receivable = float(s.amount_receivable)
 
-    finance_table = Table(
-        finance_data,
-        colWidths=[W * 0.75, W * 0.25],
-    )
-    finance_table.setStyle(TableStyle([
-        ("ALIGN",         (0, 0), (-1, -1), "RIGHT"),
-        ("FONTNAME",      (0, 0), (-1, -1), "Helvetica"),
-        ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
-        ("TEXTCOLOR",     (0, 0), (-1, -1), BRAND_DARK),
-        ("TOPPADDING",    (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ("LINEABOVE",     (0, 0), (-1, 0), 0.5, BRAND_LINE),
-    ]))
-    story.append(finance_table)
+        finance_table = Table(
+            finance_data,
+            colWidths=[W * 0.75, W * 0.25],
+        )
+        finance_table.setStyle(TableStyle([
+            ("ALIGN",         (0, 0), (-1, -1), "RIGHT"),
+            ("FONTNAME",      (0, 0), (-1, -1), "Helvetica"),
+            ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+            ("TEXTCOLOR",     (0, 0), (-1, -1), BRAND_DARK),
+            ("TOPPADDING",    (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LINEABOVE",     (0, 0), (-1, 0), 0.5, BRAND_LINE),
+        ]))
+        story.append(finance_table)
 
-    # Total row
-    total_data = [["NET AMOUNT RECEIVABLE", f"₹{net_receivable:,.2f}"]]
-    total_table = Table(total_data, colWidths=[W * 0.75, W * 0.25])
-    total_table.setStyle(TableStyle([
-        ("BACKGROUND",    (0, 0), (-1, -1), BRAND_DARK),
-        ("TEXTCOLOR",     (0, 0), (-1, -1), WHITE),
-        ("FONTNAME",      (0, 0), (-1, -1), "Helvetica-Bold"),
-        ("FONTSIZE",      (0, 0), (-1, -1), 10),
-        ("ALIGN",         (0, 0), (-1, -1), "RIGHT"),
-        ("TOPPADDING",    (0, 0), (-1, -1), 7),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-        ("RIGHTPADDING",  (-1, 0), (-1, -1), 8),
-        ("LEFTPADDING",   (0, 0), (0, -1), 8),
-    ]))
-    story.append(total_table)
-    story.append(Spacer(1, 8 * mm))
+        # Total row
+        total_data = [["NET AMOUNT RECEIVABLE", f"₹{net_receivable:,.2f}"]]
+        total_table = Table(total_data, colWidths=[W * 0.75, W * 0.25])
+        total_table.setStyle(TableStyle([
+            ("BACKGROUND",    (0, 0), (-1, -1), BRAND_DARK),
+            ("TEXTCOLOR",     (0, 0), (-1, -1), WHITE),
+            ("FONTNAME",      (0, 0), (-1, -1), "Helvetica-Bold"),
+            ("FONTSIZE",      (0, 0), (-1, -1), 10),
+            ("ALIGN",         (0, 0), (-1, -1), "RIGHT"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ("RIGHTPADDING",  (-1, 0), (-1, -1), 8),
+            ("LEFTPADDING",   (0, 0), (0, -1), 8),
+        ]))
+        story.append(total_table)
+        story.append(Spacer(1, 8 * mm))
 
     # ── POD STATUS + TRANSIT ──────────────────────────────────────────────────
     status_data = [

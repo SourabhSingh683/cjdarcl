@@ -65,6 +65,13 @@ export async function authVehicleLogin(vehicleNo) {
   });
 }
 
+export async function authCnnoLogin(cnno) {
+  return apiFetch('/auth/cnno-login/', {
+    method: 'POST',
+    body: JSON.stringify({ cnno }),
+  });
+}
+
 export async function authOTPRequest(phone) {
   return apiFetch('/auth/otp/request/', {
     method: 'POST',
@@ -117,16 +124,43 @@ export async function uploadPOD(shipmentId, file) {
   return apiFetch(`/shipments/${shipmentId}/pod/`, { method: 'POST', body: formData }, true);
 }
 
-export const downloadInvoice = (shipmentId) =>
-  `${API_BASE}/shipments/${shipmentId}/invoice/`;
+export async function downloadInvoiceAction(shipmentId) {
+  const token = localStorage.getItem('access_token');
+  const url = `${API_BASE}/shipments/${shipmentId}/invoice/`;
+  const res = await fetch(url, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
+  
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const match = cd.match(/filename="?(.+?)"?$/);
+  const filename = match ? match[1] : `invoice_${shipmentId}.pdf`;
+
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+}
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
 
-export async function uploadFile(file) {
+export async function uploadFile(files) {
   const formData = new FormData();
-  formData.append('file', file);
+  if (Array.isArray(files)) {
+    files.forEach(f => formData.append('file', f));
+  } else {
+    formData.append('file', files);
+  }
   return apiFetch('/upload/', { method: 'POST', body: formData });
 }
+
+export const clearAllData = () => apiFetch('/clear-data/', { method: 'DELETE' });
+
+export const reprocessUpload = (id) => apiFetch(`/uploads/${id}/reprocess/`, { method: 'POST' });
 
 // ─── KPIs ─────────────────────────────────────────────────────────────────────
 

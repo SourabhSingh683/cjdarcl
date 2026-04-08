@@ -10,7 +10,7 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import {
   authLogin, authOTPRequest, authOTPVerify,
-  authMe, authLogout, authVehicleLogin
+  authMe, authLogout, authVehicleLogin, authCnnoLogin, authRegister
 } from '../api';
 
 const AuthContext = createContext(null);
@@ -66,6 +66,22 @@ export function AuthProvider({ children }) {
     return data.user;
   }, []);
 
+  /** Login via CN Number (for customer simplified tracking) */
+  const loginCnno = useCallback(async (cnno) => {
+    setError(null);
+    const data = await authCnnoLogin(cnno);
+    localStorage.setItem('access_token', data.access);
+    localStorage.setItem('refresh_token', data.refresh);
+    setUser(data.user);
+    return data.user;
+  }, []);
+
+  /** Sign up a new user */
+  const signup = useCallback(async (payload) => {
+    setError(null);
+    return authRegister(payload);
+  }, []);
+
   /** Logout: clear tokens + reset state */
   const logout = useCallback(() => {
     authLogout();
@@ -74,7 +90,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider value={{
-      user, loading, error, login, loginVehicle, requestOTP, loginOTP, logout
+      user, loading, error, login, loginVehicle, loginCnno, requestOTP, loginOTP, logout, signup
     }}>
       {children}
     </AuthContext.Provider>
