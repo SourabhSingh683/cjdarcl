@@ -68,6 +68,62 @@ body {
   min-height: 100vh;
 }
 
+
+/* ─────── Quick Instant Tooltips ─────── */
+[data-tooltip] {
+  position: relative;
+}
+
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1e293b;
+  color: #f1f5f9;
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  z-index: 9999;
+  box-shadow: 0 10px 20px -5px rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Arrow */
+[data-tooltip]::before {
+  content: '';
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-top-color: #1e293b;
+  opacity: 0;
+  visibility: hidden;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+[data-tooltip]:hover::after,
+[data-tooltip]:hover::before {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Adjust for better alignment */
+.kpi-grid [data-tooltip]::after {
+  bottom: calc(100% - 5px);
+}
+.kpi-grid [data-tooltip]::before {
+  bottom: calc(100% - 13px);
+}
+
 /* ─────── Sidebar ─────── */
 
 .sidebar {
@@ -608,12 +664,46 @@ body {
   background: var(--accent-blue-glow);
 }
 
+.ai-input-wrapper {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-glass);
+}
+
+.ai-sticky-suggestions {
+  padding: 0.6rem 1.5rem 0.2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.ai-sticky-suggestions::-webkit-scrollbar { display: none; }
+
+.ai-sticky-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ai-sticky-list {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.ai-suggestion-btn.small {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
 .ai-input-bar {
   display: flex;
   gap: 0.75rem;
-  padding: 1rem 1.5rem;
-  border-top: 1px solid var(--border-glass);
-  background: var(--bg-secondary);
+  padding: 0.75rem 1.5rem 1.25rem;
 }
 
 .ai-input {

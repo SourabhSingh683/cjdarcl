@@ -85,6 +85,12 @@ class UploadLog(models.Model):
         null=True, blank=True,
         help_text="The source data file (Excel or CSV)",
     )
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name="uploads",
+        help_text="The manager who uploaded this data",
+    )
 
     class Meta:
         ordering = ["-uploaded_at"]
@@ -116,6 +122,12 @@ class Shipment(models.Model):
     upload = models.ForeignKey(
         UploadLog, on_delete=models.SET_NULL, null=True, blank=True,
         related_name="shipments",
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name="shipments",
+        help_text="Owner of the shipment record",
     )
 
     # --- Dates ---
@@ -206,58 +218,6 @@ class Shipment(models.Model):
     )
     billing_status = models.CharField(
         max_length=50, blank=True, default="", help_text="Status of the Billing",
-    )
-
-    # --- POD & Status (New) ---
-    pod_uploaded = models.BooleanField(default=False, db_index=True)
-    pod_url = models.URLField(max_length=1024, blank=True, default="")
-    invoice_url = models.URLField(max_length=1024, blank=True, default="")
-    
-    class ShipmentStatus(models.TextChoices):
-        PENDING = "pending", "Pending"
-        DELIVERED = "delivered", "Delivered"
-
-    status = models.CharField(
-        max_length=20,
-        choices=ShipmentStatus.choices,
-        default=ShipmentStatus.PENDING,
-        db_index=True,
-    )
-
-    # --- POD Upload (Driver submits proof) ---
-    pod_file = models.FileField(
-        upload_to="pod_uploads/%Y/%m/",
-        null=True, blank=True,
-        help_text="Proof of Delivery document uploaded by driver",
-    )
-    pod_uploaded_at = models.DateTimeField(
-        null=True, blank=True,
-        help_text="Timestamp when driver uploaded the POD",
-    )
-
-    # --- POD Images (up to 3 photos from driver) ---
-    pod_image_1 = models.ImageField(
-        upload_to="pod_images/", null=True, blank=True,
-        help_text="POD photo 1 uploaded by driver",
-    )
-    pod_image_2 = models.ImageField(
-        upload_to="pod_images/", null=True, blank=True,
-        help_text="POD photo 2 (optional)",
-    )
-    pod_image_3 = models.ImageField(
-        upload_to="pod_images/", null=True, blank=True,
-        help_text="POD photo 3 (optional)",
-    )
-
-    # --- Driver Assignment ---
-    # Links a registered driver (UserProfile.vehicle_no) to this shipment.
-    # NULL means unassigned / no registered driver for this vehicle.
-    assigned_driver = models.ForeignKey(
-        User,
-        on_delete=models.SET_NULL,
-        null=True, blank=True,
-        related_name="assigned_shipments",
-        help_text="Driver user assigned to deliver this shipment",
     )
 
     # --- Domain Entities ---

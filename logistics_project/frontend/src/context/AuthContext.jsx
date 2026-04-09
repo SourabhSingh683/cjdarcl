@@ -9,8 +9,7 @@
 
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import {
-  authLogin, authOTPRequest, authOTPVerify,
-  authMe, authLogout, authVehicleLogin, authCnnoLogin, authRegister
+  authLogin, authMe, authLogout, authRegister
 } from '../api';
 
 const AuthContext = createContext(null);
@@ -40,42 +39,6 @@ export function AuthProvider({ children }) {
     return data.user;
   }, []);
 
-  /** OTP step 1: request OTP for phone number. Returns demo OTP in dev mode. */
-  const requestOTP = useCallback(async (phone) => {
-    setError(null);
-    return authOTPRequest(phone);
-  }, []);
-
-  /** OTP step 2: verify OTP, auto-create user, log in */
-  const loginOTP = useCallback(async (phone, otp, extras = {}) => {
-    setError(null);
-    const data = await authOTPVerify(phone, otp, extras);
-    localStorage.setItem('access_token', data.access);
-    localStorage.setItem('refresh_token', data.refresh);
-    setUser(data.user);
-    return data.user;
-  }, []);
-
-  /** Login via vehicle number (added for driver simplicity) */
-  const loginVehicle = useCallback(async (vehicleNo) => {
-    setError(null);
-    const data = await authVehicleLogin(vehicleNo);
-    localStorage.setItem('access_token', data.access);
-    localStorage.setItem('refresh_token', data.refresh);
-    setUser(data.user);
-    return data.user;
-  }, []);
-
-  /** Login via CN Number (for customer simplified tracking) */
-  const loginCnno = useCallback(async (cnno) => {
-    setError(null);
-    const data = await authCnnoLogin(cnno);
-    localStorage.setItem('access_token', data.access);
-    localStorage.setItem('refresh_token', data.refresh);
-    setUser(data.user);
-    return data.user;
-  }, []);
-
   /** Sign up a new user */
   const signup = useCallback(async (payload) => {
     setError(null);
@@ -90,7 +53,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider value={{
-      user, loading, error, login, loginVehicle, loginCnno, requestOTP, loginOTP, logout, signup
+      user, loading, error, login, logout, signup
     }}>
       {children}
     </AuthContext.Provider>

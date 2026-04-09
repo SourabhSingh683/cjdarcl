@@ -62,6 +62,14 @@ export default function OperationalIntelligence({ filters }) {
     }
   };
 
+  const formatCurrencyExtended = (val) => {
+    if (val === undefined || val === null || isNaN(val)) return '₹0';
+    const num = Number(val);
+    if (num >= 10000000) return `₹${(num / 10000000).toFixed(2)} Cr`;
+    if (num >= 100000) return `₹${(num / 100000).toFixed(2)} L`;
+    return `₹${num.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+  };
+
   return (
     <div className="analytics-view fade-in" style={{ paddingBottom: '2rem' }}>
       <div style={{ marginBottom: '2rem' }}>
@@ -77,16 +85,37 @@ export default function OperationalIntelligence({ filters }) {
         {alerts.length > 0 ? alerts.map((alert, idx) => {
           const style = getAlertColor(alert.level);
           return (
-            <div key={idx} style={{ 
-              background: style.bg, border: `1px solid ${style.border}`, borderRadius: '12px', padding: '1.25rem',
-              display: 'flex', flexDirection: 'column', gap: '0.75rem', boxShadow: '0 2px 5px rgba(0,0,0,0.02)'
+            <div key={idx} className="alert-card-premium" style={{ 
+              background: style.bg, border: `1px solid ${style.border}`, borderRadius: '14px', padding: '1.25rem',
+              display: 'flex', flexDirection: 'column', gap: '1rem', boxShadow: '0 4px 15px rgba(0,0,0,0.03)',
+              transition: 'transform 0.2s ease, box-shadow 0.2s ease'
             }}>
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', color: style.text, fontWeight: 700, fontSize: '0.95rem' }}>
-                <span>{style.icon}</span> <span>{alert.title}</span>
+              <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', color: style.text, fontWeight: 700, fontSize: '1rem' }}>
+                <span style={{ fontSize: '1.2rem' }}>{style.icon}</span> <span>{alert.title}</span>
               </div>
-              <p style={{ fontSize: '0.9rem', color: '#334155', fontWeight: 500, lineHeight: 1.4 }}>{alert.insight}</p>
-              <div style={{ marginTop: 'auto', fontSize: '0.8rem', color: '#475569', background: 'rgba(255,255,255,0.5)', padding: '0.5rem 0.75rem', borderRadius: '6px' }}>
-                {alert.recommendation}
+              
+              <p style={{ fontSize: '0.92rem', color: '#1e293b', fontWeight: 500, lineHeight: 1.5, margin: 0 }}>
+                {alert.insight}
+              </p>
+
+              {alert.metrics && (
+                <div style={{ 
+                  display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', 
+                  gap: '0.75rem', padding: '0.75rem', background: 'rgba(255,255,255,0.6)', 
+                  borderRadius: '10px', border: '1px solid rgba(0,0,0,0.03)' 
+                }}>
+                  {Object.entries(alert.metrics).map(([key, val]) => (
+                    <div key={key}>
+                      <div style={{ fontSize: '0.65rem', color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.2rem' }}>{key}</div>
+                      <div style={{ fontSize: '0.85rem', color: style.text, fontWeight: 700 }}>{val}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ marginTop: 'auto', fontSize: '0.82rem', color: '#475569', background: 'rgba(255,255,255,0.8)', padding: '0.75rem', borderRadius: '8px', borderLeft: `3px solid ${style.border}`, display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
+                <span style={{ marginTop: '0.1rem' }}>👉</span>
+                <span>{alert.recommendation.replace('👉 ', '')}</span>
               </div>
             </div>
           );
@@ -147,23 +176,64 @@ export default function OperationalIntelligence({ filters }) {
           <div className="chart-card">
             <div className="chart-header">
               <div>
-                <div className="chart-title">🟣 Billing & SLA Impact</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <div style={{ width: '12px', height: '12px', background: '#8b5cf6', borderRadius: '50%' }} />
+                  <div className="chart-title">Billing & SLA Impact</div>
+                </div>
                 <div className="chart-subtitle">Financial impact of SLA breaches</div>
               </div>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-              <div style={{ background: 'rgba(139,92,246,0.05)', padding: '1rem', borderRadius: '8px', border: '1px solid rgba(139,92,246,0.2)' }}>
-                <div style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: '0.25rem' }}>Total Billed Freight</div>
-                <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#8b5cf6' }}>₹{(billing_sla.total_billed_freight / 10000000).toFixed(2)} Cr</div>
+            
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+              <div style={{ background: 'rgba(139,92,246,0.03)', padding: '1rem', borderRadius: '12px', border: '1px solid rgba(139,92,246,0.1)' }}>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.4rem' }}>Total Billed Freight</div>
+                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#8b5cf6', letterSpacing: '-0.02em' }}>
+                  {formatCurrencyExtended(billing_sla.total_billed_freight)}
+                </div>
               </div>
-              <div style={{ background: 'rgba(244,63,94,0.05)', padding: '1rem', borderRadius: '8px', border: '1px solid rgba(244,63,94,0.2)' }}>
-                <div style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: '0.25rem' }}>Revenue at Risk (Delayed)</div>
-                <div style={{ fontSize: '1.4rem', fontWeight: 700, color: '#e11d48' }}>₹{(billing_sla.revenue_at_risk / 10000000).toFixed(2)} Cr</div>
+              <div style={{ background: 'rgba(244,63,94,0.03)', padding: '1rem', borderRadius: '12px', border: '1px solid rgba(244,63,94,0.1)' }}>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.4rem', color: '#f43f5e' }}>Total Rev at Risk</div>
+                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#f43f5e', letterSpacing: '-0.02em' }}>
+                  {formatCurrencyExtended(billing_sla.revenue_at_risk)}
+                </div>
               </div>
-              <div style={{ gridColumn: '1 / -1', background: 'var(--bg-card)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-glass)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Historical SLA Breach Rate</span>
-                <span style={{ fontSize: '1.2rem', fontWeight: 700, color: billing_sla.sla_breach_pct > 20 ? '#e11d48' : '#059669' }}>{billing_sla.sla_breach_pct}%</span>
+            </div>
+
+            <div style={{ background: 'var(--bg-glass)', border: '1px solid var(--border-glass)', borderRadius: '12px', padding: '1rem' }}>
+              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '1rem' }}>Revenue Risk Breakdown (Top 3)</div>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '2rem' }}>
+                {/* Routes side */}
+                <div>
+                  <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.75rem' }}>By Route</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {billing_sla.risk_breakdown_routes?.map((r, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.82rem' }}>
+                        <span style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px' }}>{r.name}</span>
+                        <span style={{ fontWeight: 600, color: '#f43f5e' }}>{formatCurrencyExtended(r.value)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Transporters side */}
+                <div>
+                  <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.75rem' }}>By Transporter</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {billing_sla.risk_breakdown_transporters?.map((t, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.82rem' }}>
+                        <span style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px' }}>{t.name}</span>
+                        <span style={{ fontWeight: 600, color: '#f43f5e' }}>{formatCurrencyExtended(t.value)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
+            </div>
+
+            <div style={{ marginTop: '1.5rem', paddingTop: '1rem', borderTop: '1px solid var(--border-glass)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Historical SLA Breach Rate</span>
+              <span style={{ fontSize: '1.1rem', fontWeight: 800, color: billing_sla.sla_breach_pct > 20 ? '#f43f5e' : '#10b981' }}>{billing_sla.sla_breach_pct}%</span>
             </div>
           </div>
 

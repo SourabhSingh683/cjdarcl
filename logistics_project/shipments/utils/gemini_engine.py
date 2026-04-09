@@ -269,12 +269,37 @@ def _generate_fallback_response(user_question, data_points):
             "- **Action**: Prioritize resolving delays on the longest-running routes to limit operational impact.\n\n"
             "*(Note: Advanced AI route-level tracking is temporarily unavailable. Showing rule-based summary.)*"
         )
+    elif "penalty" in q or "deduction" in q:
+        total_p = data_points.get("total_penalties", 0)
+        p_count = data_points.get("penalty_count", 0)
+        
+        return (
+            "### 💰 Penalty & Deduction Analysis\n"
+            f"- **Total Penalties**: ₹{total_p:,.2f} recorded.\n"
+            f"- **Frequency**: {p_count} shipments incurred penalties.\n"
+            f"- **Primary Driver**: Usually linked to transit delays exceeding permissible limits.\n\n"
+            f"**Action**: Look at the `Analytics` tab and filter by **'Penalty'** to see specific vehicle numbers contributing to this leakage.\n\n"
+            "*(Note: Advanced AI penalty modeling is temporarily unavailable. Showing rule-based financial summary.)*"
+        )
+    elif "shortage" in q or "loss" in q:
+        shortage_mt = data_points.get("total_shortage", 0)
+        s_count = data_points.get("shortage_count", 0)
+        
+        return (
+            "### ⚖️ Shortage & Material Loss\n"
+            f"- **Total Shortage**: {shortage_mt:.3f} MT (Metric Tons).\n"
+            f"- **Incident Count**: {s_count} shipments with material variance.\n"
+            f"- **Status**: { '🚨 Critical variance detected.' if shortage_mt > 1 else '✓ Within operational norms.' }\n\n"
+            f"**Recommendation**: Audit the loading/unloading weighment records for routes showing consistent shortages.\n\n"
+            "*(Note: AI shortage pattern analysis is temporarily unavailable. Showing rule-based logistics data.)*"
+        )
     elif "revenue" in q or "cost" in q or "freight" in q:
         return (
             "### 💰 Financial Focus\n"
             f"- **Billed Freight**: ₹{rev:,.2f}\n"
-            "- **Impact**: High delay volumes on key routes risk freight value and delivery SLAs.\n\n"
-            "- **Action**: Investigate vendors executing routes with frequent delays to recover margin.\n\n"
+            f"- **Total Penalties**: ₹{data_points.get('total_penalties', 0):,.2f}\n"
+            f"- **Net Freight Expected**: ₹{(rev - data_points.get('total_penalties', 0)):,.2f}\n\n"
+            "- **Action**: Investigate vendors executing routes with frequent delays to recover margin.\n"
             "*(Note: Advanced AI financial analysis is temporarily unavailable. Showing rule-based summary.)*"
         )
     else:
@@ -286,8 +311,13 @@ def analyze_with_gemini(qs=None, user_question=None):
     Send shipment data summary to Gemini and get AI-powered analysis.
     Falls back to rule-based analysis if API fails.
     """
-    d_points = _get_data_points(qs)
-    
+    # ─── 0. Data Gathering (Safe) ───
+    try:
+        d_points = _get_data_points(qs)
+    except Exception as e:
+        logger.exception("Error gathering data points for AI")
+        d_points = {}
+
     # Dynamically reload environment in case the .env file was modified while server is running
     load_dotenv(BASE_DIR / ".env", override=True)
     
@@ -315,10 +345,16 @@ def analyze_with_gemini(qs=None, user_question=None):
             prompt = f"{SYSTEM_PROMPT}\n\nHere is the current logistics data:\n{data_summary}\n\nProvide a comprehensive analysis of this logistics operation."
 
         response = model.generate_content(prompt)
+        # Handle cases where response might be empty or blocked
+        try:
+            txt = response.text
+        except:
+            txt = "⚠️ AI was unable to generate a text response for this query (it may have been blocked or the content is unavailable)."
+
         return {
-            "analysis": response.text,
+            "analysis": txt,
             "model": GEMINI_MODEL,
-            "data_points": _get_data_points(qs),
+            "data_points": d_points,
             "status": "success",
         }
 
@@ -333,13 +369,13 @@ def analyze_with_gemini(qs=None, user_question=None):
         }
     except Exception as e:
         logger.exception("Gemini API error")
-        error_msg = str(e)
-        if "quota" in error_msg.lower() or "429" in error_msg:
-            clean_msg = "⚠️ Google AI API daily free-tier quota exceeded for this API key. Please try again tomorrow or generate a new key."
-        elif "api_key_invalid" in error_msg.lower() or "400" in error_msg:
+        error_msg = str(e).lower()
+        if any(w in error_msg for w in ["quota", "429", "limit", "exhausted"]):
+            clean_msg = "⚠️ Google AI API quota exceeded. Please try again later or check your API usage limits."
+        elif any(w in error_msg for w in ["api_key", "invalid", "400"]):
             clean_msg = "⚠️ Invalid Gemini API key. Please check your .env configuration."
         else:
-            clean_msg = "⚠️ AI analysis temporarily unavailable. The service may be down or experiencing issues."
+            clean_msg = "⚠️ AI analysis temporarily unavailable. The service may be experiencing issues."
             
         fallback = _generate_fallback_response(user_question, d_points)
         return {
@@ -366,6 +402,9 @@ def _get_data_points(qs):
         on_time=Count("id", filter=Q(is_on_time=True)),
         total_rev=Coalesce(Sum("revenue"), Decimal("0")),
         total_penalty=Coalesce(Sum("penalty"), Decimal("0")),
+        total_shortage=Coalesce(Sum("shortage"), 0.0, output_field=FloatField()),
+        shortage_count=Count("id", filter=Q(has_shortage=True)),
+        penalty_count=Count("id", filter=Q(has_penalty=True)),
     )
 
     worst_routes = list(
@@ -396,6 +435,9 @@ def _get_data_points(qs):
         "delayed_count": stats["delayed"],
         "total_revenue": float(stats["total_rev"]),
         "total_penalties": float(stats["total_penalty"]),
+        "total_shortage": float(stats["total_shortage"]),
+        "shortage_count": stats["shortage_count"],
+        "penalty_count": stats["penalty_count"],
         "worst_routes": worst_routes,
         "worst_transporters": worst_transporters,
     }

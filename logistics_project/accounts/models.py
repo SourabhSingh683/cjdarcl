@@ -23,29 +23,17 @@ class UserProfile(models.Model):
 
     ROLE_CHOICES = [
         ("manager",  "Branch Manager / Employee"),
-        ("driver",   "Driver"),
-        ("customer", "Customer"),
     ]
 
     user = models.OneToOneField(
         User, on_delete=models.CASCADE, related_name="profile",
     )
     role = models.CharField(
-        max_length=20, choices=ROLE_CHOICES, default="customer", db_index=True,
+        max_length=20, choices=ROLE_CHOICES, default="manager", db_index=True,
     )
     phone = models.CharField(
         max_length=15, unique=True, null=True, blank=True,
-        help_text="Mobile number used for OTP login (with country code, e.g. +919876543210)",
-    )
-    # Driver: vehicle_no(s) they are assigned to (comma-separated for multi-vehicle)
-    vehicle_no = models.CharField(
-        max_length=255, blank=True, default="",
-        help_text="Vehicle registration number(s) — links driver to shipments",
-    )
-    # Customer: customer_name or customer_id as stored in shipments
-    customer_id = models.CharField(
-        max_length=255, blank=True, default="",
-        help_text="Customer name / ID matching shipment.customer_name",
+        help_text="Mobile number used for OTP login",
     )
     is_phone_verified = models.BooleanField(default=False)
 
@@ -55,7 +43,7 @@ class UserProfile(models.Model):
         verbose_name_plural = "User Profiles"
 
     def __str__(self):
-        return f"{self.user.username} [{self.role}]"
+        return f"{self.user.username} (Manager)"
 
     @property
     def display_name(self):
@@ -94,10 +82,7 @@ class Notification(models.Model):
     """
 
     TYPE_CHOICES = [
-        ("shipment_assigned",   "Shipment Assigned"),
-        ("pod_uploaded",        "POD Uploaded"),
-        ("daily_pod_reminder",  "Daily POD Reminder"),
-        ("general",             "General"),
+        ("general", "General"),
     ]
 
     recipient = models.ForeignKey(

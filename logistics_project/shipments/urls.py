@@ -33,24 +33,12 @@ urlpatterns = [
 
     # Upload history & shipments
     path("uploads/", views.upload_history, name="upload-history"),
+    path("uploads/bulk-delete/", views.bulk_delete_uploads, name="bulk-delete-uploads"),
     path("uploads/<int:upload_id>/", views.delete_upload, name="delete-upload"),
     path("uploads/<int:upload_id>/reprocess/", views.reprocess_upload, name="reprocess-upload"),
     path("shipments/", views.shipment_list, name="shipment-list"),
     path("clear-data/", views.clear_all_data, name="clear-all-data"),
 
-    # POD upload & Invoice generation
-    path("shipments/<str:shipment_id>/pod/", views.pod_upload, name="pod-upload"),
-    path("shipments/<str:shipment_id>/invoice/", views.generate_invoice_view, name="invoice"),
-
     # AI Analysis (Gemini)
     path("ai/analyze/", views.ai_analyze, name="ai-analyze"),
-
-    # ── Driver Panel ──────────────────────────────────────────
-    path("driver/shipments/", views.DriverShipmentListView.as_view(), name="driver-shipments"),
-    path("driver/upload-pod/<int:shipment_id>/", views.UploadPodImagesView.as_view(), name="driver-upload-pod"),
-
-    # ── POD Download + View (Driver + Manager) ──────────────────
-    path("download-pod/<str:shipment_id>/", views.DownloadPodView.as_view(), name="download-pod"),
-    path("view-pod/<str:shipment_id>/", views.ViewPodView.as_view(), name="view-pod"),
-    path("driver/delete-pod/<str:shipment_id>/", views.DeletePodView.as_view(), name="delete-pod"),
 ]

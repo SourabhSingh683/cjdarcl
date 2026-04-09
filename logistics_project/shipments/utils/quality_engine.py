@@ -128,11 +128,14 @@ def compute_upload_quality(upload_log: UploadLog) -> dict:
     }
 
 
-def compute_overall_quality() -> dict:
+def compute_overall_quality(qs=None) -> dict:
     """
-    Compute overall data quality across all shipments in the database.
+    Compute overall data quality across filtered shipments.
     """
-    total = Shipment.objects.count()
+    if qs is None:
+        qs = Shipment.objects.all()
+        
+    total = qs.count()
     if total == 0:
         return {"data_quality_score": 0, "issues": ["No data in database."], "summary": {}}
 
@@ -150,7 +153,7 @@ def compute_overall_quality() -> dict:
     summary = {"total_shipments": total}
 
     for field, value, label, max_penalty in checks:
-        count = Shipment.objects.filter(**{field: value}).count()
+        count = qs.filter(**{field: value}).count()
         if count > 0:
             pct = round((count / total) * 100, 1)
             penalties += min(max_penalty, int(pct * max_penalty / 100))
@@ -158,7 +161,7 @@ def compute_overall_quality() -> dict:
             summary[f"{label.replace(' ', '_')}_count"] = count
 
     # Revenue check
-    zero_rev = Shipment.objects.filter(revenue=0, total_amount=0).count()
+    zero_rev = qs.filter(revenue=0, total_amount=0).count()
     if zero_rev > 0:
         pct = round((zero_rev / total) * 100, 1)
         penalties += min(15, int(pct * 0.15))

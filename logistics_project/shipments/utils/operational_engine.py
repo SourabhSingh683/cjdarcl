@@ -49,6 +49,8 @@ def get_operational_intelligence(qs=None):
             total_shipments=Count("id"),
             delayed=Count("id", filter=Q(is_on_time=False)),
             total_revenue=Coalesce(Sum("revenue"), Decimal("0"), output_field=DecimalField()),
+            revenue_at_risk=Coalesce(Sum("revenue", filter=Q(is_on_time=False)), Decimal("0"), output_field=DecimalField()),
+            avg_delay=Coalesce(Avg("delay_days", filter=Q(is_on_time=False)), 0, output_field=IntegerField()),
             avg_transit=Coalesce(Avg("transit_taken"), 0, output_field=IntegerField())
         )
         .filter(total_shipments__gt=0)
@@ -66,7 +68,9 @@ def get_operational_intelligence(qs=None):
             "delayed_shipments": r["delayed"],
             "delay_pct": delay_pct,
             "avg_transit_days": r["avg_transit"],
+            "avg_delay_days": r["avg_delay"],
             "total_revenue": float(r["total_revenue"]),
+            "revenue_at_risk": float(r["revenue_at_risk"]),
         })
     
     # Best and Worst routes
@@ -82,8 +86,30 @@ def get_operational_intelligence(qs=None):
     # 3. Section: Management Alerts
     alerts = []
 
-    # A. High Risk Routes
-    high_risk_routes = [r for r in routes if r["delay_pct"] >= 40 and r["total_shipments"] >= 2]
+    # A. High Risk Routes & Grouping for 100% Delays
+    # User requested: "alerts only if total shipments > 10 and delays > 80%"
+    # AND grouping 100% delay routes into one card.
+    
+    valid_routes = [r for r in routes if r["total_shipments"] > 10]
+    
+    # 100% Delay Individually
+    critical_routes = [r for r in valid_routes if r["delay_pct"] >= 100.0]
+    for cr in critical_routes:
+        alerts.append({
+            "type": "absolute_risk_route",
+            "level": "red",
+            "title": f"Absolute Risk: {cr['route_name']}",
+            "insight": f"🚨 Critical Failure: Every single shipment from {cr['origin']} to {cr['destination']} was delayed.",
+            "metrics": {
+                "Revenue at Risk": f"₹{cr['revenue_at_risk']:,.2f}",
+                "Volume": f"{cr['total_shipments']} shipments",
+                "Avg Delay": f"{cr['avg_delay_days']} days"
+            },
+            "recommendation": "👉 IMMEDIATE AUDIT REQUIRED. Analyze carrier assignments and corridor constraints immediately."
+        })
+
+    # High Risk Routes (other than 100%)
+    high_risk_routes = [r for r in valid_routes if 80.0 < r["delay_pct"] < 100.0]
     high_risk_routes = sorted(high_risk_routes, key=lambda x: -x["delay_pct"])[:5]
     if high_risk_routes:
         for hr in high_risk_routes:
@@ -92,18 +118,33 @@ def get_operational_intelligence(qs=None):
                 "level": "red",
                 "title": f"Live Risk: {hr['route_name']}",
                 "insight": f"{hr['route_name']} has {hr['delay_pct']}% delay rate across {hr['total_shipments']} shipments.",
-                "recommendation": "👉 Consider re-allocating to a different transporter or route line."
+                "metrics": {
+                    "Revenue at Risk": f"₹{hr['revenue_at_risk']:,.2f}",
+                    "Avg Delay": f"{hr['avg_delay_days']} days",
+                    "Success Rate": f"{100 - hr['delay_pct']}%"
+                },
+                "recommendation": "👉 Check with driver to be punctual and analyze route conditions."
             })
 
     # B. Worst Transporter
-    if transporters and transporters[0]["delay_pct"] > 0:
-        worst_t = transporters[0]
+    significant_transporters = [t for t in transporters if t["total_shipments"] > 10]
+    if significant_transporters and significant_transporters[0]["delay_pct"] > 80:
+        worst_t = significant_transporters[0]
+        # Calculate revenue at risk for this transporter
+        t_risk = qs.filter(transporter_name=worst_t["transporter_name"], is_on_time=False).aggregate(
+            risk=Coalesce(Sum("revenue"), Decimal("0"), output_field=DecimalField())
+        )["risk"]
         alerts.append({
             "type": "worst_transporter",
-            "level": "red" if worst_t["delay_pct"] > 30 else "yellow",
+            "level": "red",
             "title": f"Transporter Alert: {worst_t['transporter_name']}",
             "insight": f"Transporter {worst_t['transporter_name']} has {worst_t['delay_pct']}% delay rate (highest this period).",
-            "recommendation": "👉 Review contracts or issue performance warning."
+            "metrics": {
+                "Revenue at Risk": f"₹{float(t_risk):,.2f}",
+                "Avg Delay": f"{worst_t['avg_delay_days']} days",
+                "Volume": f"{worst_t['total_shipments']} shipments"
+            },
+            "recommendation": "👉 Advise driver on punctuality and review transporter route management."
         })
 
     # C. Revenue Leakage
@@ -139,14 +180,20 @@ def get_operational_intelligence(qs=None):
         })
 
     # E. Repeated Failure Routes
-    repeated = [r for r in routes if r["delayed_shipments"] >= 4 and r["total_shipments"] >= 5]
+    repeated = [r for r in valid_routes if r["delay_pct"] > 80.0]
     for rr in repeated[:3]:
+        if rr["delay_pct"] >= 100.0: continue
+        
         alerts.append({
             "type": "repeated_failure",
             "level": "red",
             "title": f"Consistent Delay: {rr['route_name']}",
-            "insight": f"🔁 {rr['route_name']} was delayed in {rr['delayed_shipments']} out of {rr['total_shipments']} recent trips.",
-            "recommendation": "👉 Operational intervention required on this corridor."
+            "insight": f"🔁 {rr['route_name']} was delayed in {rr['delayed_shipments']} out of {rr['total_shipments']} recent trips ({rr['delay_pct']}%).",
+            "metrics": {
+                "Revenue at Risk": f"₹{rr['revenue_at_risk']:,.2f}",
+                "Avg Delay": f"{rr['avg_delay_days']} days"
+            },
+            "recommendation": "👉 Brief drivers on punctuality and audit corridor for avoidable delays."
         })
 
     # 4. Section: Billing & SLA Impact
@@ -157,10 +204,37 @@ def get_operational_intelligence(qs=None):
         revenue_at_risk=Coalesce(Sum("revenue", filter=Q(is_on_time=False)), Decimal("0"), output_field=DecimalField()),
     )
 
+    # Risk Breakdown: Top 3 Routes by Revenue-at-Risk
+    risk_routes_qs = (
+        qs.filter(is_on_time=False)
+        .values("route__origin", "route__destination")
+        .annotate(risk_value=Sum("revenue"))
+        .order_by("-risk_value")[:3]
+    )
+    risk_breakdown_routes = [
+        {"name": f"{r['route__origin']} → {r['route__destination']}", "value": float(r["risk_value"] or 0)} 
+        for r in risk_routes_qs
+    ]
+
+    # Risk Breakdown: Top 3 Transporters by Revenue-at-Risk
+    risk_trans_qs = (
+        qs.filter(is_on_time=False)
+        .exclude(transporter_name="")
+        .values("transporter_name")
+        .annotate(risk_value=Sum("revenue"))
+        .order_by("-risk_value")[:3]
+    )
+    risk_breakdown_transporters = [
+        {"name": t["transporter_name"], "value": float(t["risk_value"] or 0)} 
+        for t in risk_trans_qs
+    ]
+
     billing_sla = {
         "total_billed_freight": float(sla_stats["total_billed"]),
         "revenue_at_risk": float(sla_stats["revenue_at_risk"]),
-        "sla_breach_pct": sla_breach_pct
+        "sla_breach_pct": sla_breach_pct,
+        "risk_breakdown_routes": risk_breakdown_routes,
+        "risk_breakdown_transporters": risk_breakdown_transporters,
     }
 
     return {

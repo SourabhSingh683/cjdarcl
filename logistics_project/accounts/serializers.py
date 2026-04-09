@@ -46,10 +46,8 @@ class RegisterSerializer(serializers.Serializer):
     email = serializers.EmailField(required=False, allow_blank=True)
     first_name = serializers.CharField(required=False, allow_blank=True)
     last_name = serializers.CharField(required=False, allow_blank=True)
-    role = serializers.ChoiceField(choices=["manager", "driver", "customer"])
+    role = serializers.ChoiceField(choices=["manager"])
     phone = serializers.CharField(required=False, allow_blank=True)
-    vehicle_no = serializers.CharField(required=False, allow_blank=True)
-    customer_id = serializers.CharField(required=False, allow_blank=True)
 
     def validate_username(self, value):
         if User.objects.filter(username=value).exists():
@@ -68,8 +66,6 @@ class RegisterSerializer(serializers.Serializer):
             user=user,
             role=validated_data["role"],
             phone=validated_data.get("phone") or None,
-            vehicle_no=validated_data.get("vehicle_no", ""),
-            customer_id=validated_data.get("customer_id", ""),
         )
         return user
 
@@ -93,77 +89,6 @@ class LoginSerializer(serializers.Serializer):
         return attrs
 
 
-class VehicleLoginSerializer(serializers.Serializer):
-    """Login via vehicle number ONLY (for drivers). Returns JWT tokens."""
-
-    vehicle_no = serializers.CharField()
-
-    def validate(self, attrs):
-        v = attrs["vehicle_no"].strip()
-        if not v:
-            raise serializers.ValidationError("Vehicle number is required.")
-
-        # Find a driver profile with this vehicle number
-        profile = UserProfile.objects.filter(role="driver", vehicle_no__icontains=v).first()
-
-        if not profile:
-            # OPTIONAL: auto-create user for new vehicle
-            from django.utils.crypto import get_random_string
-            username = f"driver_{v.replace('-', '').replace(' ', '')}"
-            user, created = User.objects.get_or_create(username=username)
-            if created:
-                user.set_unusable_password()
-                user.first_name = "New"
-                user.last_name = f"Driver ({v})"
-                user.save()
-            
-            profile, _ = UserProfile.objects.get_or_create(user=user)
-            profile.role = "driver"
-            profile.vehicle_no = v
-            profile.save()
-        
-        attrs["user"] = profile.user
-        return attrs
-
-
-class CnnoLoginSerializer(serializers.Serializer):
-    """Login via CN Number (Consignment Note Number). Returns JWT tokens."""
-
-    cnno = serializers.CharField()
-
-    def validate(self, attrs):
-        from shipments.models import Shipment
-        cn = attrs["cnno"].strip()
-        if not cn:
-            raise serializers.ValidationError("CN No. is required.")
-
-        # Find shipment to identify the consignee
-        shipment = Shipment.objects.filter(shipment_id__iexact=cn).first()
-        if not shipment:
-            raise serializers.ValidationError("Invalid CN Number. Shipment not found.")
-
-        cust_name = shipment.consignee_name
-        if not cust_name:
-            raise serializers.ValidationError("This shipment has no Consignee Name associated.")
-
-        # Find or create a user for this consignee identity
-        import re
-        slug = re.sub(r'[^a-z0-9_]', '', cust_name.lower().replace(' ', '_'))[:30]
-        username = f"cust_{slug}"
-        
-        user, created = User.objects.get_or_create(username=username)
-        if created:
-            user.set_unusable_password()
-            user.first_name = cust_name[:30]
-            user.save()
-            
-        profile, _ = UserProfile.objects.get_or_create(user=user)
-        profile.role = "customer"
-        profile.customer_id = cust_name
-        profile.save()
-        
-        attrs["user"] = user
-        return attrs
 
 
 # ─── OTP Flow ────────────────────────────────────────────────────────────────
@@ -199,10 +124,8 @@ class OTPVerifySerializer(serializers.Serializer):
     otp = serializers.CharField(max_length=6)
     # Optional fields for first-time registration
     role = serializers.ChoiceField(
-        choices=["manager", "driver", "customer"], required=False, default="customer"
+        choices=["manager"], required=False, default="manager"
     )
-    vehicle_no = serializers.CharField(required=False, allow_blank=True, default="")
-    customer_id = serializers.CharField(required=False, allow_blank=True, default="")
 
     def validate(self, attrs):
         phone = attrs["phone"].strip().replace(" ", "")
@@ -247,9 +170,7 @@ class OTPVerifySerializer(serializers.Serializer):
                 user.save()
             profile, _ = UserProfile.objects.get_or_create(user=user)
             profile.phone = phone
-            profile.role = attrs.get("role", "customer")
-            profile.vehicle_no = attrs.get("vehicle_no", "")
-            profile.customer_id = attrs.get("customer_id", "")
+            profile.role = attrs.get("role", "manager")
             profile.is_phone_verified = True
             profile.save()
 
@@ -261,7 +182,7 @@ class OTPVerifySerializer(serializers.Serializer):
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserProfile
-        fields = ["role", "phone", "vehicle_no", "customer_id", "is_phone_verified"]
+        fields = ["role", "phone", "is_phone_verified"]
 
 
 class MeSerializer(serializers.ModelSerializer):

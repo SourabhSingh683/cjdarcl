@@ -44,28 +44,18 @@ logger = logging.getLogger("shipments")
 # Role-based filtering helper
 def _filter_by_role(qs, request):
     """
-    Restrict queryset based on the authenticated user's role.
-      manager  — sees everything
-      driver   — sees only shipments where vehicle_no matches their profile
-      customer — sees only shipments where customer_name matches their customer_id
-      anonymous / no profile — sees nothing (returns empty qs)
+    Restrict queryset based on the authenticated user.
+    Managers only see the data they have uploaded.
     """
     user = request.user
     if not user or not user.is_authenticated:
         return qs.none()
-    profile = getattr(user, "profile", None)
-    if not profile:
-        return qs.none()
-    if profile.role == "manager":
+    
+    # If the user is a superuser, they can see everything (optional, but good for debugging)
+    if user.is_superuser:
         return qs
-    if profile.role == "driver":
-        vehicle = profile.vehicle_no.strip()
-        return qs.filter(vehicle_no__icontains=vehicle) if vehicle else qs.none()
-    if profile.role == "customer":
-        cust = profile.customer_id.strip()
-        # Consignee-based filtering
-        return qs.filter(consignee_name__icontains=cust) if cust else qs.none()
-    return qs.none()
+        
+    return qs.filter(user=user)
 
 
 # ─── Helpers ─────────────────────────────────────────────
@@ -111,6 +101,7 @@ class StandardPagination(PageNumberPagination):
 # ═══════════════════════════════════════════════════════════
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def upload_file(request):
     """POST /api/upload/ — Upload one or more Excel/CSV files with full processing."""
     # We support both 'file' (single) and 'files' (multiple)
@@ -121,10 +112,15 @@ def upload_file(request):
     if not files:
         return Response({"error": "No files provided"}, status=status.HTTP_400_BAD_REQUEST)
 
+    # Check for refresh flag
+    if request.GET.get('refresh') == 'true':
+        with transaction.atomic():
+            Shipment.objects.filter(user=request.user).delete()
+
     results = []
     for uploaded_file in files:
         try:
-            result = _process_single_file(uploaded_file)
+            result = _process_single_file(uploaded_file, request)
             results.append(result)
         except Exception as e:
             logger.exception(f"Crash in upload loop for {uploaded_file.name}")
@@ -134,9 +130,11 @@ def upload_file(request):
                 "details": str(e)
             })
 
-    # Return 201 if all good, or 207 Multi-Status if there are mixed results
+    # If any file reported duplicates and we didn't refresh, the frontend will see it
     has_error = any("error" in r for r in results)
     status_code = status.HTTP_207_MULTI_STATUS if (has_error and len(results) > 1) else status.HTTP_201_CREATED
+    if any(r.get("error") == "DUPLICATES_FOUND" for r in results):
+        status_code = status.HTTP_409_CONFLICT
     
     if len(results) == 1:
         return Response(results[0], status=status_code)
@@ -147,16 +145,21 @@ def upload_file(request):
     }, status=status_code)
 
 
-def _process_single_file(uploaded_file):
+def _process_single_file(uploaded_file, request):
     """Helper to process a single uploaded file and return the result dict."""
+    user = request.user
     file_name = uploaded_file.name
     # Ensure file pointer is at start
     if hasattr(uploaded_file, "seek"):
         uploaded_file.seek(0)
 
+    # 1. Pre-cleaning check for duplicates if refresh is not requested
+    # We only do this if the user hasn't already asked to force a refresh
+    is_refresh = request.GET.get('refresh') == 'true'
+
     upload_log = UploadLog.objects.create(
         file_name=file_name, status=UploadLog.Status.PROCESSING,
-        original_file=uploaded_file
+        original_file=uploaded_file, user=user
     )
     # ⚠️ CRITICAL: UploadLog creation reads the whole file to save it.
     # We must seek back to 0 so process_file doesn't see an empty file.
@@ -167,7 +170,23 @@ def _process_single_file(uploaded_file):
 
     try:
         clean_df, errors, dup_count = process_file(uploaded_file, file_name)
-        _bulk_insert_shipments(clean_df, upload_log)
+        
+        # Cross-file duplicate detection
+        incoming_ids = set(clean_df["shipment_id"].tolist())
+        existing_count = Shipment.objects.filter(user=user, shipment_id__in=incoming_ids).count()
+        
+        if existing_count > 0 and not is_refresh:
+            upload_log.status = UploadLog.Status.FAILED
+            upload_log.error_log = json.dumps({"fatal": "Duplicate records detected in system."})
+            upload_log.save()
+            return {
+                "file_name": file_name,
+                "error": "DUPLICATES_FOUND",
+                "duplicate_count": existing_count,
+                "message": "This file contains shipments that already exist in your dashboard. Would you like to Start Refresh?"
+            }
+
+        _bulk_insert_shipments(clean_df, upload_log, user)
 
         elapsed_ms = int((time.time() - start_time) * 1000)
         upload_log.total_rows = len(clean_df) + len(errors) + dup_count
@@ -219,12 +238,14 @@ def _process_single_file(uploaded_file):
 
 
 @api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
 def clear_all_data(request):
-    """DELETE /api/clear-data/ — Truncate all shipment data."""
+    """DELETE /api/clear-data/ — Truncate user's shipment data but preserve history."""
     with transaction.atomic():
-        Shipment.objects.all().delete()
-        Route.objects.all().delete()
-    return Response({"message": "Dashboard data cleared successfully, history preserved."}, status=status.HTTP_200_OK)
+        # User requested: "only affect dashboard, analytics, intel and alerts... not history"
+        # Shipments = Dashboard data. UploadLogs = History.
+        Shipment.objects.filter(user=request.user).delete()
+    return Response({"message": "Dashboard data cleared successfully. History and AI templates preserved."}, status=status.HTTP_200_OK)
 
 
 @api_view(["POST"])
@@ -244,7 +265,7 @@ def reprocess_upload(request, upload_id):
         file_obj.seek(0)
         
         clean_df, errors, dup_count = process_file(file_obj, upload_log.file_name)
-        _bulk_insert_shipments(clean_df, upload_log)
+        _bulk_insert_shipments(clean_df, upload_log, upload_log.user)
 
         upload_log.total_rows = len(clean_df) + len(errors) + dup_count
         upload_log.processed_rows = len(clean_df)
@@ -272,7 +293,7 @@ def reprocess_upload(request, upload_id):
 
 
 @transaction.atomic
-def _bulk_insert_shipments(df, upload_log):
+def _bulk_insert_shipments(df, upload_log, user):
     """Bulk-insert with cross-file dedup on shipment_id."""
     # Routes
     route_pairs = df[["origin", "destination"]].drop_duplicates().values.tolist()
@@ -304,15 +325,17 @@ def _bulk_insert_shipments(df, upload_log):
     to_create, to_update = [], []
     for _, row in df.iterrows():
         route = route_cache[(row["origin"], row["destination"])]
-        data = _build_shipment_data(row, route, upload_log)
+        data = _build_shipment_data(row, route, upload_log, user)
 
         sid = row["shipment_id"]
         if sid in existing_shipments:
             shipment = existing_shipments[sid]
-            for key, value in data.items():
-                if key != "shipment_id":
-                    setattr(shipment, key, value)
-            to_update.append(shipment)
+            # Verify ownership before updating
+            if shipment.user == user or user.is_superuser:
+                for key, value in data.items():
+                    if key != "shipment_id":
+                        setattr(shipment, key, value)
+                to_update.append(shipment)
         else:
             to_create.append(Shipment(**data))
 
@@ -320,7 +343,7 @@ def _bulk_insert_shipments(df, upload_log):
         Shipment.objects.bulk_create(to_create, batch_size=500)
     if to_update:
         Shipment.objects.bulk_update(to_update, fields=[
-            "route", "upload", "dispatch_date", "delivery_date",
+            "route", "upload", "user", "dispatch_date", "delivery_date",
             "expected_delivery_date", "vehicle_type", "vehicle_no",
             "revenue", "rate_per_mt", "total_amount", "freight_deduction",
             "penalty", "amount_receivable", "net_weight", "gross_weight",
@@ -332,7 +355,7 @@ def _bulk_insert_shipments(df, upload_log):
         ], batch_size=500)
 
 
-def _build_shipment_data(row, route, upload_log):
+def _build_shipment_data(row, route, upload_log, user):
     """Build shipment dict from a cleaned DataFrame row."""
     import pandas as pd
 
@@ -345,6 +368,7 @@ def _build_shipment_data(row, route, upload_log):
         "shipment_id": row["shipment_id"],
         "route": route,
         "upload": upload_log,
+        "user": user,
         "dispatch_date": _safe_date(row["dispatch_date"]),
         "delivery_date": _safe_date(row.get("delivery_date")),
         "expected_delivery_date": _safe_date(row.get("expected_delivery_date")),
@@ -385,27 +409,31 @@ def _build_shipment_data(row, route, upload_log):
 
 @api_view(["GET"])
 def kpi_summary(request):
-    qs = _apply_filters(Shipment.objects.all(), request.GET)
+    qs = _filter_by_role(Shipment.objects.all(), request)
+    qs = _apply_filters(qs, request.GET)
     return Response(get_summary_kpis(qs))
 
 
 @api_view(["GET"])
 def kpi_revenue_trends(request):
-    qs = _apply_filters(Shipment.objects.all(), request.GET)
+    qs = _filter_by_role(Shipment.objects.all(), request)
+    qs = _apply_filters(qs, request.GET)
     group_by = request.GET.get("group_by", "day")
     return Response(get_revenue_trends(qs, group_by=group_by))
 
 
 @api_view(["GET"])
 def kpi_top_routes(request):
-    qs = _apply_filters(Shipment.objects.all(), request.GET)
+    qs = _filter_by_role(Shipment.objects.all(), request)
+    qs = _apply_filters(qs, request.GET)
     limit = min(int(request.GET.get("limit", 10)), 50)
     return Response(get_top_routes(qs, limit=limit))
 
 
 @api_view(["GET"])
 def kpi_delayed_shipments(request):
-    qs = _apply_filters(Shipment.objects.all(), request.GET)
+    qs = _filter_by_role(Shipment.objects.all(), request)
+    qs = _apply_filters(qs, request.GET)
     delayed_qs = get_delayed_shipments(qs)
     paginator = StandardPagination()
     page = paginator.paginate_queryset(delayed_qs, request)
@@ -415,7 +443,8 @@ def kpi_delayed_shipments(request):
 
 @api_view(["GET"])
 def kpi_transporter_performance(request):
-    qs = _apply_filters(Shipment.objects.all(), request.GET)
+    qs = _filter_by_role(Shipment.objects.all(), request)
+    qs = _apply_filters(qs, request.GET)
     limit = min(int(request.GET.get("limit", 5)), 20)
     return Response(get_transporter_performance(qs, limit=limit))
 
@@ -428,20 +457,23 @@ def kpi_transporter_performance(request):
 def operational_intelligence(request):
     """GET /api/analysis/operational-intelligence/ — Operational alerts and analytics."""
     from .utils.operational_engine import get_operational_intelligence
-    qs = _apply_filters(Shipment.objects.all(), request.GET)
+    qs = _filter_by_role(Shipment.objects.all(), request)
+    qs = _apply_filters(qs, request.GET)
     return Response(get_operational_intelligence(qs))
 
 @api_view(["GET"])
 def analysis_root_cause(request):
     """GET /api/analysis/root-cause/ — Full root cause analysis."""
-    qs = _apply_filters(Shipment.objects.all(), request.GET)
+    qs = _filter_by_role(Shipment.objects.all(), request)
+    qs = _apply_filters(qs, request.GET)
     return Response(get_full_root_cause(qs))
 
 
 @api_view(["GET"])
 def analysis_risk(request):
     """GET /api/analysis/risk/ — Risk prediction for routes and vehicles."""
-    qs = _apply_filters(Shipment.objects.all(), request.GET)
+    qs = _filter_by_role(Shipment.objects.all(), request)
+    qs = _apply_filters(qs, request.GET)
     return Response(get_risk_summary(qs))
 
 
@@ -449,20 +481,23 @@ def analysis_risk(request):
 def analysis_shortage(request):
     """GET /api/analysis/shortage/ — Shortage analysis."""
     from .utils.analysis_engine import analyze_shortages
-    qs = _apply_filters(Shipment.objects.all(), request.GET)
+    qs = _filter_by_role(Shipment.objects.all(), request)
+    qs = _apply_filters(qs, request.GET)
     return Response(analyze_shortages(qs))
 
 
 @api_view(["GET"])
 def data_quality(request):
     """GET /api/quality/ — Overall data quality score."""
-    return Response(compute_overall_quality())
+    qs = _filter_by_role(Shipment.objects.all(), request)
+    return Response(compute_overall_quality(qs))
 
 
 @api_view(["GET"])
 def period_comparison(request):
     """GET /api/kpis/comparison/?days=30 — Period comparison."""
-    qs = _apply_filters(Shipment.objects.all(), request.GET)
+    qs = _filter_by_role(Shipment.objects.all(), request)
+    qs = _apply_filters(qs, request.GET)
     days = int(request.GET.get("days", 30))
     return Response(compare_periods(qs, days=days))
 
@@ -470,7 +505,8 @@ def period_comparison(request):
 @api_view(["GET"])
 def smart_insights(request):
     """GET /api/insights/smart/ — Enhanced context-aware insights."""
-    qs = _apply_filters(Shipment.objects.all(), request.GET)
+    qs = _filter_by_role(Shipment.objects.all(), request)
+    qs = _apply_filters(qs, request.GET)
     return Response({"insights": generate_smart_insights(qs)})
 
 
@@ -480,7 +516,8 @@ def kpi_drilldown(request):
     GET /api/kpis/drilldown/?filter=delayed|on_time|shortage|penalty
     Returns paginated detailed records for the selected KPI.
     """
-    qs = _apply_filters(Shipment.objects.select_related("route").all(), request.GET)
+    base_qs = _filter_by_role(Shipment.objects.select_related("route"), request)
+    qs = _apply_filters(base_qs, request.GET)
     filter_type = request.GET.get("filter", "all")
 
     if filter_type == "delayed":
@@ -518,7 +555,7 @@ def insights(request):
 
 @api_view(["GET"])
 def upload_history(request):
-    uploads = UploadLog.objects.all()
+    uploads = _filter_by_role(UploadLog.objects.all(), request)
     paginator = StandardPagination()
     page = paginator.paginate_queryset(uploads, request)
     serializer = UploadLogSerializer(page, many=True, context={"request": request})
@@ -528,14 +565,34 @@ def upload_history(request):
 @api_view(["DELETE"])
 @permission_classes([IsAuthenticated])
 def delete_upload(request, upload_id):
+    """DELETE /api/uploads/<id>/ — Remove one upload and its shipments."""
     try:
-        upload = UploadLog.objects.get(id=upload_id)
+        qs = _filter_by_role(UploadLog.objects.all(), request)
+        upload = qs.get(id=upload_id)
         # Delete associated shipments manually because on_delete is SET_NULL
         Shipment.objects.filter(upload=upload).delete()
         upload.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
     except UploadLog.DoesNotExist:
-        return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response({"error": "Upload not found"}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def bulk_delete_uploads(request):
+    """POST /api/uploads/bulk-delete/ — Remove multiple uploads."""
+    ids = request.data.get("ids", [])
+    if not ids:
+        return Response({"error": "No IDs provided"}, status=status.HTTP_400_BAD_REQUEST)
+    
+    with transaction.atomic():
+        qs = _filter_by_role(UploadLog.objects.all(), request)
+        uploads = qs.filter(id__in=ids)
+        # Delete associated shipments
+        Shipment.objects.filter(upload__in=uploads).delete()
+        count = uploads.count()
+        uploads.delete()
+        
+    return Response({"message": f"Successfully deleted {count} uploads."}, status=status.HTTP_200_OK)
 
 
 @api_view(["GET"])
@@ -561,107 +618,19 @@ def shipment_list(request):
     return paginator.get_paginated_response(serializer.data)
 
 
-@api_view(["POST"])
-def pod_upload(request, shipment_id):
-    """
-    POST /api/shipments/<shipment_id>/pod/
-    Upload a POD document for a shipment.
-    Only the assigned driver (or a manager) may upload.
-    After upload:
-      - Sets pod_status = "Uploaded"
-      - Fires pod_uploaded signal → notifies all managers
-    """
-    from django.utils import timezone
-    from rest_framework.parsers import MultiPartParser
-    from rest_framework.permissions import IsAuthenticated
-    from accounts.signals import pod_uploaded
-
-    if not request.user or not request.user.is_authenticated:
-        return Response({"error": "Authentication required."}, status=status.HTTP_401_UNAUTHORIZED)
-
-    profile = getattr(request.user, "profile", None)
-    if not profile:
-        return Response({"error": "User profile not found."}, status=status.HTTP_403_FORBIDDEN)
-    if profile.role not in ("driver", "manager"):
-        return Response({"error": "Only drivers and managers can upload POD."}, status=status.HTTP_403_FORBIDDEN)
-
-    try:
-        shipment = Shipment.objects.get(shipment_id=shipment_id)
-    except Shipment.DoesNotExist:
-        return Response({"error": "Shipment not found."}, status=status.HTTP_404_NOT_FOUND)
-
-    # Drivers may only upload for their own vehicle
-    if profile.role == "driver":
-        vehicle = profile.vehicle_no.strip()
-        if vehicle and vehicle.lower() not in shipment.vehicle_no.lower():
-            return Response(
-                {"error": "You can only upload POD for shipments assigned to your vehicle."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-    pod_file = request.FILES.get("pod_file")
-    if not pod_file:
-        return Response({"error": "No file provided. Use key 'pod_file'."}, status=status.HTTP_400_BAD_REQUEST)
-
-    # Persist POD
-    shipment.pod_file = pod_file
-    now = timezone.now()
-    shipment.pod_uploaded_at = now
-    shipment.pod_status = "Uploaded"
-    shipment.delivery_date = now.date()
-    shipment.status = "delivered"
-    shipment.assigned_driver = request.user
-    
-    # Recalculate transit taken and delay
-    if shipment.dispatch_date:
-        shipment.transit_taken = (shipment.delivery_date - shipment.dispatch_date).days
-        shipment.delay_days = max(0, shipment.transit_taken - shipment.transit_permissible)
-        shipment.is_on_time = (shipment.delay_days == 0)
-
-    shipment.save(update_fields=[
-        "pod_file", "pod_uploaded_at", "pod_status", "delivery_date", 
-        "status", "assigned_driver", "transit_taken", "delay_days", "is_on_time"
-    ])
-
-    # Fire signal → managers get notified
-    pod_uploaded.send(
-        sender=Shipment,
-        shipment_id=shipment.shipment_id,
-        driver_user=request.user,
-    )
-
-    logger.info(f"POD uploaded by {request.user.username} for shipment {shipment.shipment_id}")
-    return Response(
-        {
-            "message": "POD uploaded successfully.",
-            "shipment_id": shipment.shipment_id,
-            "pod_status": shipment.pod_status,
-            "uploaded_at": shipment.pod_uploaded_at.isoformat(),
-        },
-        status=status.HTTP_200_OK,
-    )
-
-
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def generate_invoice_view(request, shipment_id):
     """
     GET /api/shipments/<shipment_id>/invoice/
     Stream a professional PDF invoice for the given shipment.
-    Managers and authenticated users may download invoices.
     """
-    from django.http import HttpResponse
     from shipments.services.pdf_generator import generate_invoice
+    from django.http import HttpResponse
 
     try:
-        # Detect role for conditional financial data visibility.
-        # Defaults to 'customer' (restricted) if unauthenticated or no profile.
-        role = "customer"
-        if request.user.is_authenticated and hasattr(request.user, "profile"):
-            role = request.user.profile.role
-        
-        hide_financials = (role != "manager") # Only Managers see full details
-        
-        pdf_bytes = generate_invoice(shipment_id, hide_financials=hide_financials)
+        # Everyone authenticated is a manager, so hide_financials is always False
+        pdf_bytes = generate_invoice(shipment_id, hide_financials=False)
     except Shipment.DoesNotExist:
         return Response({"error": "Shipment not found."}, status=status.HTTP_404_NOT_FOUND)
     except Exception as exc:
@@ -671,6 +640,7 @@ def generate_invoice_view(request, shipment_id):
     response = HttpResponse(pdf_bytes, content_type="application/pdf")
     response["Content-Disposition"] = f'inline; filename="invoice_{shipment_id}.pdf"'
     return response
+    
 
 
 # ═══════════════════════════════════════════════════════════
@@ -681,318 +651,9 @@ def generate_invoice_view(request, shipment_id):
 def ai_analyze(request):
     """POST /api/ai/analyze/ — Gemini-powered AI analysis."""
     from .utils.gemini_engine import analyze_with_gemini
-
-    qs = _apply_filters(Shipment.objects.all(), request.data)
+    
+    base_qs = _filter_by_role(Shipment.objects.all(), request)
+    qs = _apply_filters(base_qs, request.data)
     question = request.data.get("question", None)
     result = analyze_with_gemini(qs, user_question=question)
     return Response(result)
-
-
-# ═══════════════════════════════════════════════════════════
-# DRIVER PANEL — Simple Endpoints
-# ═══════════════════════════════════════════════════════════
-
-from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.parsers import MultiPartParser, FormParser
-from .serializers import DriverShipmentSerializer, PodImageUploadSerializer
-
-
-class DriverShipmentListView(APIView):
-    """
-    GET /api/driver/shipments/
-    Returns shipments assigned to the logged-in driver
-    (matched by vehicle_no from their UserProfile).
-    """
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        profile = getattr(request.user, "profile", None)
-        if not profile or profile.role != "driver":
-            return Response(
-                {"error": "Driver profile not found."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-        vehicle = (profile.vehicle_no or "").strip()
-        if not vehicle:
-            return Response([])  # no vehicle → no shipments
-
-        qs = (
-            Shipment.objects
-            .select_related("route")
-            .filter(vehicle_no__icontains=vehicle)
-            .order_by("-created_at")
-        )
-        serializer = DriverShipmentSerializer(qs, many=True, context={"request": request})
-        return Response(serializer.data)
-
-
-class UploadPodImagesView(APIView):
-    """
-    POST /api/driver/upload-pod/<int:shipment_id>/
-    Upload up to 3 POD photos for a shipment.
-    Only the assigned driver may upload.
-    """
-    permission_classes = [IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser]
-
-    def post(self, request, shipment_id):
-        from django.utils import timezone
-
-        profile = getattr(request.user, "profile", None)
-        if not profile or profile.role not in ("driver", "manager"):
-            return Response(
-                {"error": "Only drivers can upload POD photos."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        try:
-            shipment = Shipment.objects.get(id=shipment_id)
-        except Shipment.DoesNotExist:
-            return Response(
-                {"error": "Shipment not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        # Verify driver owns this shipment (vehicle match)
-        if profile.role == "driver":
-            vehicle = (profile.vehicle_no or "").strip().lower()
-            if vehicle and vehicle not in shipment.vehicle_no.lower():
-                return Response(
-                    {"error": "Ye shipment aapki gaadi ka nahi hai."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-
-        serializer = PodImageUploadSerializer(
-            shipment, data=request.data, partial=True
-        )
-        if serializer.is_valid():
-            serializer.save()
-            now = timezone.now()
-            shipment.pod_status = "Uploaded"
-            shipment.pod_uploaded_at = now
-            shipment.delivery_date = now.date()
-            shipment.status = "delivered"
-            shipment.assigned_driver = request.user
-
-            # Recalculate transit taken and delay
-            if shipment.dispatch_date:
-                shipment.transit_taken = (shipment.delivery_date - shipment.dispatch_date).days
-                shipment.delay_days = max(0, shipment.transit_taken - shipment.transit_permissible)
-                shipment.is_on_time = (shipment.delay_days == 0)
-
-            shipment.save(update_fields=[
-                "pod_status", "pod_uploaded_at", "delivery_date", 
-                "status", "assigned_driver", "transit_taken", "delay_days", "is_on_time"
-            ])
-            logger.info(
-                f"POD photos uploaded by {request.user.username} "
-                f"for shipment {shipment.shipment_id}"
-            )
-
-            # 🔔 Notify all Branch Managers
-            from accounts.signals import pod_uploaded
-            pod_uploaded.send(
-                sender=Shipment,
-                shipment_id=shipment.shipment_id,
-                driver_user=request.user,
-            )
-
-            return Response({
-                "message": "Photo upload ho gaya ✅",
-                "shipment_id": shipment.shipment_id,
-            })
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-class DownloadPodView(APIView):
-    """
-    GET /api/download-pod/<shipment_id>/
-    Download POD images.
-      - Single image  → returns the image file directly
-      - Multiple images → returns a ZIP containing all images
-    Accessible by driver (own shipments) and manager (all shipments).
-    """
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request, shipment_id):
-        import io
-        import zipfile
-        import os
-        from django.http import FileResponse, HttpResponse
-
-        try:
-            shipment = Shipment.objects.get(shipment_id=shipment_id)
-        except Shipment.DoesNotExist:
-            # Also try by primary key
-            try:
-                shipment = Shipment.objects.get(id=shipment_id)
-            except (Shipment.DoesNotExist, ValueError):
-                return Response(
-                    {"error": "Shipment not found"},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-
-        # Collect available POD images
-        images = []
-        for field_name in ("pod_image_1", "pod_image_2", "pod_image_3"):
-            field = getattr(shipment, field_name, None)
-            if field and field.name:
-                images.append(field)
-
-        if not images:
-            return Response(
-                {"error": "No POD images found for this shipment."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        # Single image → return directly
-        if len(images) == 1:
-            img = images[0]
-            ext = os.path.splitext(img.name)[1].lower() or ".jpg"
-            content_types = {
-                ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                ".png": "image/png", ".gif": "image/gif",
-                ".webp": "image/webp",
-            }
-            ct = content_types.get(ext, "application/octet-stream")
-            filename = f"POD_{shipment.shipment_id}{ext}"
-            return FileResponse(
-                img.open("rb"),
-                content_type=ct,
-                as_attachment=True,
-                filename=filename,
-            )
-
-        # Multiple images → ZIP
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            for i, img in enumerate(images, 1):
-                ext = os.path.splitext(img.name)[1].lower() or ".jpg"
-                arc_name = f"POD_{shipment.shipment_id}_photo{i}{ext}"
-                zf.writestr(arc_name, img.read())
-
-        buffer.seek(0)
-        response = HttpResponse(buffer, content_type="application/zip")
-        response["Content-Disposition"] = (
-            f'attachment; filename="POD_{shipment.shipment_id}.zip"'
-        )
-        return response
-
-
-class ViewPodView(APIView):
-    """
-    GET /api/view-pod/<shipment_id>/
-    Returns POD image URLs + shipment info as JSON for in-app preview.
-    """
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request, shipment_id):
-        try:
-            shipment = Shipment.objects.select_related("route").get(
-                shipment_id=shipment_id
-            )
-        except Shipment.DoesNotExist:
-            try:
-                shipment = Shipment.objects.select_related("route").get(
-                    id=shipment_id
-                )
-            except (Shipment.DoesNotExist, ValueError):
-                return Response(
-                    {"error": "Shipment not found"},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-
-        images = []
-        for i, field_name in enumerate(
-            ("pod_image_1", "pod_image_2", "pod_image_3"), 1
-        ):
-            field = getattr(shipment, field_name, None)
-            if field and field.name:
-                images.append({
-                    "index": i,
-                    "url": request.build_absolute_uri(field.url),
-                })
-
-        route = shipment.route
-        return Response({
-            "shipment_id": shipment.shipment_id,
-            "origin": route.origin if route else "",
-            "destination": route.destination if route else "",
-            "vehicle_no": shipment.vehicle_no,
-            "dispatch_date": str(shipment.dispatch_date) if shipment.dispatch_date else "",
-            "pod_status": shipment.pod_status,
-            "pod_uploaded_at": (
-                shipment.pod_uploaded_at.isoformat()
-                if shipment.pod_uploaded_at else None
-            ),
-            "images": images,
-            "image_count": len(images),
-            "id": shipment.id,
-        })
-
-
-class DeletePodView(APIView):
-    """
-    POST /api/driver/delete-pod/<str:shipment_id>/
-    Delete all POD images and reset shipment status.
-    Used by driver if they upload a hazy photo.
-    """
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, shipment_id):
-        profile = getattr(request.user, "profile", None)
-        if not profile or profile.role not in ("driver", "manager"):
-            return Response(
-                {"error": "Only drivers and managers can delete POD."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        # Try lookup by integer ID or string shipment_id
-        shipment = None
-        try:
-            if shipment_id.isdigit():
-                shipment = Shipment.objects.get(id=int(shipment_id))
-            else:
-                shipment = Shipment.objects.get(shipment_id=shipment_id)
-        except Shipment.DoesNotExist:
-            return Response(
-                {"error": "Shipment not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        # Verify driver owns this shipment
-        if profile.role == "driver":
-            vehicle = (profile.vehicle_no or "").strip().lower()
-            if vehicle and vehicle not in shipment.vehicle_no.lower():
-                return Response(
-                    {"error": "Ye shipment aapki gaadi ka nahi hai."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-
-        # Clear all POD data
-        if shipment.pod_image_1:
-            shipment.pod_image_1.delete(save=False)
-        if shipment.pod_image_2:
-            shipment.pod_image_2.delete(save=False)
-        if shipment.pod_image_3:
-            shipment.pod_image_3.delete(save=False)
-        if shipment.pod_file:
-            shipment.pod_file.delete(save=False)
-        
-        shipment.pod_status = ""
-        shipment.pod_uploaded_at = None
-        shipment.delivery_date = None
-        shipment.status = "assigned" 
-        shipment.assigned_driver = None
-        shipment.transit_taken = 0
-        shipment.delay_days = 0
-        shipment.is_on_time = True
-        
-        shipment.save()
-        
-        logger.info(f"POD deleted by {request.user.username} for shipment {shipment.shipment_id}")
-        return Response({"message": "POD delete ho gaya. Aap naya photo bhej sakte hain. ✅"})
-
-
-

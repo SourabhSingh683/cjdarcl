@@ -58,34 +58,6 @@ export async function authLogin(username, password) {
   });
 }
 
-export async function authVehicleLogin(vehicleNo) {
-  return apiFetch('/auth/vehicle-login/', {
-    method: 'POST',
-    body: JSON.stringify({ vehicle_no: vehicleNo }),
-  });
-}
-
-export async function authCnnoLogin(cnno) {
-  return apiFetch('/auth/cnno-login/', {
-    method: 'POST',
-    body: JSON.stringify({ cnno }),
-  });
-}
-
-export async function authOTPRequest(phone) {
-  return apiFetch('/auth/otp/request/', {
-    method: 'POST',
-    body: JSON.stringify({ phone }),
-  });
-}
-
-export async function authOTPVerify(phone, otp, extras = {}) {
-  return apiFetch('/auth/otp/verify/', {
-    method: 'POST',
-    body: JSON.stringify({ phone, otp, ...extras }),
-  });
-}
-
 export async function authMe() {
   return apiFetch('/auth/me/', {}, true);
 }
@@ -102,27 +74,10 @@ export async function authRegister(payload) {
   });
 }
 
-// ─── Notifications ────────────────────────────────────────────────────────────
-
-export const fetchNotifications = (p = {}) =>
-  apiFetch(`/notifications/${buildQuery(p)}`, {}, true);
-
-export const markNotificationRead = (id) =>
-  apiFetch(`/notifications/${id}/read/`, { method: 'PATCH' }, true);
-
-export const markAllNotificationsRead = () =>
-  apiFetch('/notifications/mark-all-read/', { method: 'POST' }, true);
-
 // ─── Shipments (role-filtered when authenticated) ─────────────────────────────
 
 export const fetchShipments = (f = {}) =>
   apiFetch(`/shipments/${buildQuery(f)}`, {}, true);
-
-export async function uploadPOD(shipmentId, file) {
-  const formData = new FormData();
-  formData.append('pod_file', file);
-  return apiFetch(`/shipments/${shipmentId}/pod/`, { method: 'POST', body: formData }, true);
-}
 
 export async function downloadInvoiceAction(shipmentId) {
   const token = localStorage.getItem('access_token');
@@ -148,108 +103,103 @@ export async function downloadInvoiceAction(shipmentId) {
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
 
-export async function uploadFile(files) {
+export async function uploadFile(files, refresh = false) {
   const formData = new FormData();
   if (Array.isArray(files)) {
     files.forEach(f => formData.append('file', f));
   } else {
     formData.append('file', files);
   }
-  return apiFetch('/upload/', { method: 'POST', body: formData });
+  const query = refresh ? '?refresh=true' : '';
+  return apiFetch(`/upload/${query}`, { method: 'POST', body: formData }, true);
 }
 
-export const clearAllData = () => apiFetch('/clear-data/', { method: 'DELETE' });
+/**
+ * Upload file with real-time progress tracking
+ */
+export function uploadFileWithProgress(files, refresh = false, onProgress = () => {}) {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    if (Array.isArray(files)) {
+      files.forEach(f => formData.append('file', f));
+    } else {
+      formData.append('file', files);
+    }
+    
+    const query = refresh ? '?refresh=true' : '';
+    const xhr = new XMLHttpRequest();
+    const token = localStorage.getItem('access_token');
+    
+    xhr.open('POST', `${API_BASE}/upload/${query}`);
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    }
 
-export const reprocessUpload = (id) => apiFetch(`/uploads/${id}/reprocess/`, { method: 'POST' });
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        const percent = Math.round((event.loaded / event.total) * 100);
+        onProgress(percent);
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch (e) {
+          resolve(xhr.responseText);
+        }
+      } else {
+        try {
+          const body = JSON.parse(xhr.responseText);
+          reject(new Error(body.error || body.detail || 'Upload failed'));
+        } catch (e) {
+          reject(new Error(`HTTP ${xhr.status}`));
+        }
+      }
+    };
+
+    xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.send(formData);
+  });
+}
+
+export const clearAllData = () => apiFetch('/clear-data/', { method: 'DELETE' }, true);
+
+export const reprocessUpload = (id) => apiFetch(`/uploads/${id}/reprocess/`, { method: 'POST' }, true);
 
 // ─── KPIs ─────────────────────────────────────────────────────────────────────
 
-export const fetchSummary        = (f = {}) => apiFetch(`/kpis/summary/${buildQuery(f)}`);
-export const fetchRevenueTrends  = (f = {}) => apiFetch(`/kpis/revenue-trends/${buildQuery(f)}`);
-export const fetchTopRoutes      = (f = {}) => apiFetch(`/kpis/top-routes/${buildQuery(f)}`);
-export const fetchDelayedShipments = (f = {}) => apiFetch(`/kpis/delayed-shipments/${buildQuery(f)}`);
-export const fetchDrilldown      = (f = {}) => apiFetch(`/kpis/drilldown/${buildQuery(f)}`);
-export const fetchComparison     = (f = {}) => apiFetch(`/kpis/comparison/${buildQuery(f)}`);
-export const fetchTransporterPerformance = (f = {}) => apiFetch(`/kpis/transporter-performance/${buildQuery(f)}`);
+export const fetchSummary        = (f = {}) => apiFetch(`/kpis/summary/${buildQuery(f)}`, {}, true);
+export const fetchRevenueTrends  = (f = {}) => apiFetch(`/kpis/revenue-trends/${buildQuery(f)}`, {}, true);
+export const fetchTopRoutes      = (f = {}) => apiFetch(`/kpis/top-routes/${buildQuery(f)}`, {}, true);
+export const fetchDelayedShipments = (f = {}) => apiFetch(`/kpis/delayed-shipments/${buildQuery(f)}`, {}, true);
+export const fetchDrilldown      = (f = {}) => apiFetch(`/kpis/drilldown/${buildQuery(f)}`, {}, true);
+export const fetchComparison     = (f = {}) => apiFetch(`/kpis/comparison/${buildQuery(f)}`, {}, true);
+export const fetchTransporterPerformance = (f = {}) => apiFetch(`/kpis/transporter-performance/${buildQuery(f)}`, {}, true);
 
 // ─── Analytics ───────────────────────────────────────────────────────────────
 
-export const fetchOperationalIntelligence = (f = {}) => apiFetch(`/analysis/operational-intelligence/${buildQuery(f)}`);
-export const fetchRootCause  = (f = {}) => apiFetch(`/analysis/root-cause/${buildQuery(f)}`);
-export const fetchRisk       = (f = {}) => apiFetch(`/analysis/risk/${buildQuery(f)}`);
-export const fetchShortage   = (f = {}) => apiFetch(`/analysis/shortage/${buildQuery(f)}`);
+export const fetchOperationalIntelligence = (f = {}) => apiFetch(`/analysis/operational-intelligence/${buildQuery(f)}`, {}, true);
+export const fetchRootCause  = (f = {}) => apiFetch(`/analysis/root-cause/${buildQuery(f)}`, {}, true);
+export const fetchRisk       = (f = {}) => apiFetch(`/analysis/risk/${buildQuery(f)}`, {}, true);
+export const fetchShortage   = (f = {}) => apiFetch(`/analysis/shortage/${buildQuery(f)}`, {}, true);
 
 // ─── Quality & Insights ───────────────────────────────────────────────────────
 
-export const fetchQuality       = () => apiFetch('/quality/');
-export const fetchInsights      = (f = {}) => apiFetch(`/insights/${buildQuery(f)}`);
-export const fetchSmartInsights = (f = {}) => apiFetch(`/insights/smart/${buildQuery(f)}`);
+export const fetchQuality       = () => apiFetch('/quality/', {}, true);
+export const fetchInsights      = (f = {}) => apiFetch(`/insights/${buildQuery(f)}`, {}, true);
+export const fetchSmartInsights = (f = {}) => apiFetch(`/insights/smart/${buildQuery(f)}`, {}, true);
 
 // ─── History ─────────────────────────────────────────────────────────────────
 
-export const fetchUploadHistory = () => apiFetch('/uploads/');
+export const fetchUploadHistory = () => apiFetch('/uploads/', {}, true);
 export const deleteUpload       = (id) => apiFetch(`/uploads/${id}/`, { method: 'DELETE' }, true);
+export const bulkDeleteUploads  = (ids) => apiFetch('/uploads/bulk-delete/', { method: 'POST', body: JSON.stringify({ ids }) }, true);
 
-// ─── AI Analysis (Gemini) ────────────────────────────────────────────────────
-
-export async function fetchAIAnalysis(question = '') {
-  return apiFetch('/ai/analyze/', {
-    method: 'POST',
-    body: JSON.stringify({ question }),
-  });
-}
-
-// ─── Driver Panel ─────────────────────────────────────────────────────────────
-
-export const fetchDriverShipments = () =>
-  apiFetch('/driver/shipments/', {}, true);
-
-export async function uploadPodImages(shipmentId, photos) {
-  const formData = new FormData();
-  if (photos[0]) formData.append('pod_image_1', photos[0]);
-  if (photos[1]) formData.append('pod_image_2', photos[1]);
-  if (photos[2]) formData.append('pod_image_3', photos[2]);
-  return apiFetch(`/driver/upload-pod/${shipmentId}/`, {
-    method: 'POST',
-    body: formData,
-  }, true);
-}
-
-/** Download POD images (single image or ZIP) */
-export function downloadPodUrl(shipmentId) {
-  return `${API_BASE}/download-pod/${shipmentId}/`;
-}
-
-export async function downloadPod(shipmentId) {
-  const token = localStorage.getItem('access_token');
-  const url = `${API_BASE}/download-pod/${shipmentId}/`;
-  const res = await fetch(url, {
-    headers: { 'Authorization': `Bearer ${token}` },
-  });
-  if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
-  const blob = await res.blob();
-  const cd = res.headers.get('Content-Disposition') || '';
-  const match = cd.match(/filename="?(.+?)"?$/);
-  const filename = match ? match[1] : `POD_${shipmentId}`;
-  // Trigger browser download
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(a.href);
-}
-
-/** Get POD image URLs for in-app preview */
-export const viewPod = (shipmentId) =>
-  apiFetch(`/view-pod/${shipmentId}/`, {}, true);
 
 /** Get invoice URL for viewing in new tab */
 export const getInvoiceUrl = (shipmentId) =>
   `${API_BASE}/shipments/${shipmentId}/invoice/`;
-
-export const deletePod = (shipmentId) =>
-  apiFetch(`/driver/delete-pod/${shipmentId}/`, { method: 'POST' }, true);
 
 
