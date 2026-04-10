@@ -5,7 +5,7 @@ import {
   fetchUploadHistory, fetchRootCause, fetchRisk,
   fetchQuality, fetchDrilldown, uploadFile, uploadFileWithProgress, deleteUpload, fetchShipments,
   getInvoiceUrl,
-  clearAllData, reprocessUpload, bulkDeleteUploads
+  clearAllData, reprocessUpload, bulkDeleteUploads, uploadProfitFile
 } from './api';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -14,6 +14,7 @@ import {
 import { useAuth } from './context/AuthContext';
 import LoginPage from './components/LoginPage';
 import OperationalIntelligence from './components/OperationalIntelligence';
+import ProfitAnalysis from './components/ProfitAnalysis';
 
 // ─── Constants ─────────────────────────────────────────
 // ─── Formatting Helpers ──────────────────────────────────────────────────────
@@ -45,6 +46,7 @@ const NAV_ITEMS = [
   { key: 'dashboard', icon: '📊', label: 'Dashboard' },
   { key: 'analytics', icon: '🔍', label: 'Analytics' },
   { key: 'intelligence', icon: '🚨', label: 'Alerts & Intel' },
+  { key: 'profit', icon: '💰', label: 'Profit Analysis' },
   { key: 'upload', icon: '📁', label: 'Upload Data' },
   { key: 'history', icon: '📋', label: 'History' },
 ];
@@ -53,6 +55,7 @@ const PAGE_META = {
   dashboard: { title: 'Command Center', sub: 'Real-time logistics overview and key metrics' },
   analytics: { title: 'Deep Analytics', sub: 'Root cause analysis and risk prediction' },
   intelligence: { title: 'Operational Intelligence', sub: 'Actionable alerts and historical performance' },
+  profit: { title: 'Profit Analysis', sub: 'Lane profitability, margins, and cost intelligence' },
   upload: { title: 'Upload Data', sub: 'Import your shipment files' },
   history: { title: 'Upload History', sub: 'Track all your data imports' },
 };
@@ -217,7 +220,8 @@ function ManagerDashboard({ user, onLogout }) {
           {tab === 'dashboard' && <DashboardView {...{ summary, revenueTrends, topRoutes, transporterPerformance, loading, error, filters, setFilters, cnMatches }} onFilter={handleFilter} onClear={handleClear} onDrilldown={openDrilldown} />}
           {tab === 'analytics' && <AnalyticsView rootCause={rootCause} risk={risk} loading={loading} error={error} summary={summary} onDrilldown={openDrilldown} />}
           {tab === 'intelligence' && <OperationalIntelligence filters={filters} />}
-          {tab === 'upload' && <UploadView onUploadDone={() => { setRootCause(null); setRisk(null); loadDashboard(filters); setTab('dashboard'); }} />}
+          {tab === 'profit' && <ProfitAnalysis />}
+          {tab === 'upload' && <UploadView onUploadDone={() => { setRootCause(null); setRisk(null); loadDashboard(filters); setTab('dashboard'); }} onProfitUploadDone={() => setTab('profit')} />}
           {tab === 'history' && <HistoryView uploads={uploads} loading={loading} onRefresh={() => { setRootCause(null); setRisk(null); loadDashboard(filters); }} />}
         </main>
       </div>
@@ -956,13 +960,13 @@ function Spinner({ text }) {
 // ═══════════════════════════════════════════════════════════
 // Upload View
 // ═══════════════════════════════════════════════════════════
-function UploadView({ onUploadDone }) {
+function UploadView({ onUploadDone, onProfitUploadDone }) {
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
-
+  const [uploadType, setUploadType] = useState(null); // null = selector, 'billing' | 'profit'
 
   const handleStartFresh = async () => {
     if (!window.confirm("⚠️ This will clear your current Dashboard, Analytics, and AI insights to allow for a clean data refresh. Your full Upload History will be preserved. Proceed?")) return;
@@ -988,17 +992,25 @@ function UploadView({ onUploadDone }) {
     if (files.length === 0) return;
     setUploading(true); setResult(null); setError(null); setDuplicateError(null); setUploadProgress(0);
     try {
-      const res = await uploadFileWithProgress(files, forceRefresh, (p) => setUploadProgress(p));
+      let res;
+      if (uploadType === 'profit') {
+        res = await uploadProfitFile(files, forceRefresh, (p) => setUploadProgress(p));
+      } else {
+        res = await uploadFileWithProgress(files, forceRefresh, (p) => setUploadProgress(p));
+      }
       setResult(res);
       setPendingFiles(null);
-      // Success sequence
       setShowLoveMessage(true);
       setTimeout(() => {
         setShowLoveMessage(false);
-        onUploadDone();
+        if (uploadType === 'profit') {
+          onProfitUploadDone?.();
+        } else {
+          onUploadDone();
+        }
       }, 2000);
     } catch (e) {
-      if (e.message.includes('DUPLICATES_FOUND') || e.message.includes('Duplicate records detected')) {
+      if (e.message.includes('DUPLICATES_FOUND') || e.message.includes('Duplicate records detected') || e.message.includes('profit records already')) {
         setDuplicateError(e.message);
         setPendingFiles(fileList);
       } else {
@@ -1009,12 +1021,65 @@ function UploadView({ onUploadDone }) {
     }
   };
 
+  // ── TYPE SELECTOR ──
+  if (!uploadType) {
+    return (
+      <div className="upload-container">
+        <h2 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.5rem', color: '#0f172a' }}>Select Upload Type</h2>
+        <p style={{ fontSize: '0.88rem', color: '#64748b', marginBottom: '1.5rem' }}>Choose what type of data you're uploading</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
+          {/* Billing Data Card */}
+          <div onClick={() => setUploadType('billing')} style={{
+            background: '#fff', border: '2px solid #e2e8f0', borderRadius: '16px', padding: '2rem', cursor: 'pointer',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', transition: 'all 0.25s',
+          }} onMouseEnter={e => { e.currentTarget.style.borderColor = '#3b82f6'; e.currentTarget.style.boxShadow = '0 8px 30px rgba(59,130,246,0.12)'; e.currentTarget.style.transform = 'translateY(-3px)'; }}
+             onMouseLeave={e => { e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.boxShadow = ''; e.currentTarget.style.transform = ''; }}>
+            <div style={{ width: '60px', height: '60px', borderRadius: '16px', background: 'linear-gradient(135deg, #3b82f6, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.8rem' }}>📋</div>
+            <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#0f172a' }}>Billing Data</div>
+            <p style={{ fontSize: '0.82rem', color: '#64748b', textAlign: 'center', lineHeight: 1.5, margin: 0 }}>
+              Upload shipment billing files for Dashboard, Analytics, and Operational Intelligence.
+            </p>
+            <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#3b82f6', background: 'rgba(59,130,246,0.08)', padding: '4px 12px', borderRadius: '999px' }}>Existing Flow</span>
+          </div>
+
+          {/* Profit & Margin Card */}
+          <div onClick={() => setUploadType('profit')} style={{
+            background: '#fff', border: '2px solid #e2e8f0', borderRadius: '16px', padding: '2rem', cursor: 'pointer',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', transition: 'all 0.25s',
+          }} onMouseEnter={e => { e.currentTarget.style.borderColor = '#10b981'; e.currentTarget.style.boxShadow = '0 8px 30px rgba(16,185,129,0.12)'; e.currentTarget.style.transform = 'translateY(-3px)'; }}
+             onMouseLeave={e => { e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.boxShadow = ''; e.currentTarget.style.transform = ''; }}>
+            <div style={{ width: '60px', height: '60px', borderRadius: '16px', background: 'linear-gradient(135deg, #10b981, #059669)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.8rem' }}>💰</div>
+            <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#0f172a' }}>Profit & Margin Analysis</div>
+            <p style={{ fontSize: '0.82rem', color: '#64748b', textAlign: 'center', lineHeight: 1.5, margin: 0 }}>
+              Upload Gross Margin MIS reports for lane profitability, cost trends, and margin intelligence.
+            </p>
+            <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#10b981', background: 'rgba(16,185,129,0.08)', padding: '4px 12px', borderRadius: '999px' }}>New Feature</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── UPLOAD ZONE (after type is selected) ──
   return (
     <div className="upload-container">
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
-        <button className="btn btn-ghost" onClick={handleStartFresh} disabled={uploading || clearing} style={{ color: '#f87171', border: '1px solid #fecaca' }}>
-          {clearing ? '⏳ Clearing...' : '🔄 Start Refresh'}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <button className="btn btn-ghost" onClick={() => { setUploadType(null); setResult(null); setError(null); setDuplicateError(null); }} style={{ color: '#3b82f6' }}>
+          ← Back to Type Selection
         </button>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <span style={{
+            fontSize: '0.75rem', fontWeight: 700, padding: '4px 14px', borderRadius: '999px',
+            background: uploadType === 'profit' ? 'rgba(16,185,129,0.1)' : 'rgba(59,130,246,0.1)',
+            color: uploadType === 'profit' ? '#059669' : '#3b82f6',
+            border: `1px solid ${uploadType === 'profit' ? 'rgba(16,185,129,0.3)' : 'rgba(59,130,246,0.3)'}`
+          }}>
+            {uploadType === 'profit' ? '💰 Profit & Margin' : '📋 Billing Data'}
+          </span>
+          <button className="btn btn-ghost" onClick={handleStartFresh} disabled={uploading || clearing} style={{ color: '#f87171', border: '1px solid #fecaca' }}>
+            {clearing ? '⏳ Clearing...' : '🔄 Start Refresh'}
+          </button>
+        </div>
       </div>
 
       {duplicateError && (
@@ -1024,7 +1089,7 @@ function UploadView({ onUploadDone }) {
             <div style={{ flex: 1 }}>
               <h4 style={{ margin: 0, color: '#92400e', fontSize: '1rem', fontWeight: 700 }}>Duplicate Data Detected</h4>
               <p style={{ margin: '0.25rem 0 1rem 0', color: '#b45309', fontSize: '0.88rem', lineHeight: 1.5 }}>
-                This file contains shipments that already exist in your system. To ensure data accuracy and avoid data conflicts in Analytics and AI Copilot, we recommend a <strong>Start Refresh</strong> before proceeding.
+                This file contains records that already exist in your system. To ensure data accuracy, we recommend a <strong>Start Refresh</strong> before proceeding.
               </p>
               <div style={{ display: 'flex', gap: '0.75rem' }}>
                 <button className="btn btn-primary" onClick={() => handleFiles(null, true)} style={{ background: '#d97706', border: 'none' }}>
@@ -1049,16 +1114,16 @@ function UploadView({ onUploadDone }) {
           <div style={{ position: 'absolute', inset: 0, background: 'rgba(255,255,255,0.95)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 50, animation: 'fadeIn 0.3s ease-out' }}>
             <div style={{ fontSize: '3rem', marginBottom: '1rem', animation: 'bounce 1s infinite' }}>❤️</div>
             <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#1e293b', textAlign: 'center' }}>With love by Sourabh and Priyanshu</div>
-            <div style={{ fontSize: '0.9rem', color: '#64748b', marginTop: '0.5rem' }}>Processing complete. Dashboard updating...</div>
+            <div style={{ fontSize: '0.9rem', color: '#64748b', marginTop: '0.5rem' }}>Processing complete. {uploadType === 'profit' ? 'Redirecting to Profit Analysis...' : 'Dashboard updating...'}</div>
           </div>
         )}
 
-        <div className="upload-icon">{uploading ? '⏳' : '📁'}</div>
-        <div className="upload-title">{uploading ? (uploadProgress < 100 ? `Uploading... ${uploadProgress}%` : 'Finalizing processing...') : 'Drop your Excel/CSV file(s) here'}</div>
-        <div className="upload-subtitle">Supports multiple .xlsx, .xls, .csv files (max 10MB each)</div>
+        <div className="upload-icon">{uploading ? '⏳' : uploadType === 'profit' ? '💰' : '📁'}</div>
+        <div className="upload-title">{uploading ? (uploadProgress < 100 ? `Uploading... ${uploadProgress}%` : 'Finalizing processing...') : `Drop your ${uploadType === 'profit' ? 'Gross Margin MIS' : 'Billing'} file(s) here`}</div>
+        <div className="upload-subtitle">Supports .xlsx, .xls, .csv files (max 10MB each)</div>
         {uploading && (
           <div className="progress-bar-container" style={{ width: '80%', height: '8px', background: 'rgba(59,130,246,0.1)', borderRadius: '99px', marginTop: '1.5rem', overflow: 'hidden' }}>
-            <div className="progress-bar-fill" style={{ width: `${uploadProgress}%`, height: '100%', background: 'linear-gradient(90deg, #3b82f6, #8b5cf6)', transition: 'width 0.3s ease-out' }} />
+            <div className="progress-bar-fill" style={{ width: `${uploadProgress}%`, height: '100%', background: uploadType === 'profit' ? 'linear-gradient(90deg, #10b981, #059669)' : 'linear-gradient(90deg, #3b82f6, #8b5cf6)', transition: 'width 0.3s ease-out' }} />
           </div>
         )}
         <input id="file-input" className="upload-input" type="file" accept=".xlsx,.xls,.csv" multiple onChange={e => handleFiles(e.target.files)} />
@@ -1073,10 +1138,10 @@ function UploadView({ onUploadDone }) {
             </div>
           ) : (
             <div className="upload-stats">
-              <div className="upload-stat"><div className="upload-stat-value">{result.processed_rows}</div><div className="upload-stat-label">Processed</div></div>
-              <div className="upload-stat"><div className="upload-stat-value" style={{ color: result.error_rows > 0 ? '#f59e0b' : '#10b981' }}>{result.error_rows}</div><div className="upload-stat-label">Errors</div></div>
-              <div className="upload-stat"><div className="upload-stat-value">{result.duplicates_removed || 0}</div><div className="upload-stat-label">Duplicates</div></div>
-              <div className="upload-stat"><div className="upload-stat-value">{result.processing_time}</div><div className="upload-stat-label">Time</div></div>
+              <div className="upload-stat"><div className="upload-stat-value">{result.processed_rows || result.processed || 0}</div><div className="upload-stat-label">Processed</div></div>
+              <div className="upload-stat"><div className="upload-stat-value" style={{ color: (result.error_rows || result.errors) > 0 ? '#f59e0b' : '#10b981' }}>{result.error_rows || result.errors || 0}</div><div className="upload-stat-label">Errors</div></div>
+              <div className="upload-stat"><div className="upload-stat-value">{result.duplicates_removed || result.duplicates || 0}</div><div className="upload-stat-label">Duplicates</div></div>
+              <div className="upload-stat"><div className="upload-stat-value">{result.processing_time || `${result.time_ms || 0}ms`}</div><div className="upload-stat-label">Time</div></div>
             </div>
           )}
         </div>
@@ -1085,6 +1150,7 @@ function UploadView({ onUploadDone }) {
     </div>
   );
 }
+
 
 
 // ═══════════════════════════════════════════════════════════

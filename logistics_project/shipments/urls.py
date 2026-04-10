@@ -41,4 +41,13 @@ urlpatterns = [
 
     # AI Analysis (Gemini)
     path("ai/analyze/", views.ai_analyze, name="ai-analyze"),
+
+    # Profit Analysis
+    path("profit/upload/", views.profit_upload, name="profit-upload"),
+    path("profit/summary/", views.profit_summary, name="profit-summary"),
+    path("profit/lanes/", views.profit_lanes, name="profit-lanes"),
+    path("profit/trends/", views.profit_trends, name="profit-trends"),
+    path("profit/alerts/", views.profit_alerts, name="profit-alerts"),
+    path("profit/drilldown/", views.profit_drilldown, name="profit-drilldown"),
+    path("profit/insights/", views.profit_insights, name="profit-insights"),
 ]

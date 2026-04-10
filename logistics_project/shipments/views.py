@@ -23,7 +23,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from rest_framework.permissions import IsAuthenticated
-from .models import Route, UploadLog, Shipment
+from .models import Route, UploadLog, Shipment, ProfitRecord
 from .serializers import (
     FileUploadSerializer, ShipmentSerializer, ShipmentListSerializer,
     UploadLogSerializer,
@@ -657,3 +657,168 @@ def ai_analyze(request):
     question = request.data.get("question", None)
     result = analyze_with_gemini(qs, user_question=question)
     return Response(result)
+
+
+# ═══════════════════════════════════════════════════════════
+# PROFIT ANALYSIS
+# ═══════════════════════════════════════════════════════════
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def profit_upload(request):
+    """POST /api/profit/upload/ — Upload Gross Margin MIS Excel file."""
+    from .utils.profit_data_cleaner import process_profit_file, ProfitDataError
+    from .models import ProfitRecord
+
+    files = request.FILES.getlist("file")
+    if not files:
+        files = request.FILES.getlist("files")
+    if not files:
+        return Response({"error": "No files provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = request.user
+
+    # Check for refresh flag
+    if request.GET.get('refresh') == 'true':
+        with transaction.atomic():
+            ProfitRecord.objects.filter(user=user).delete()
+
+    results = []
+    for uploaded_file in files:
+        file_name = uploaded_file.name
+        if hasattr(uploaded_file, "seek"):
+            uploaded_file.seek(0)
+
+        upload_log = UploadLog.objects.create(
+            file_name=f"[PROFIT] {file_name}",
+            status=UploadLog.Status.PROCESSING,
+            original_file=uploaded_file,
+            user=user,
+        )
+        if hasattr(uploaded_file, "seek"):
+            uploaded_file.seek(0)
+
+        start_time = time.time()
+
+        try:
+            clean_df, errors, dup_count = process_profit_file(uploaded_file, file_name)
+
+            # Cross-file duplicate detection
+            incoming_ids = set(clean_df["sap_delivery_no"].tolist()) if len(clean_df) > 0 else set()
+            existing_count = ProfitRecord.objects.filter(user=user, sap_delivery_no__in=incoming_ids).count() if incoming_ids else 0
+
+            is_refresh = request.GET.get('refresh') == 'true'
+            if existing_count > 0 and not is_refresh:
+                upload_log.status = UploadLog.Status.FAILED
+                upload_log.error_log = json.dumps({"fatal": "Duplicate records detected."})
+                upload_log.save()
+                results.append({
+                    "file_name": file_name,
+                    "error": "DUPLICATES_FOUND",
+                    "duplicate_count": existing_count,
+                    "message": "This file contains profit records already in your system. Would you like to Start Refresh?"
+                })
+                continue
+
+            # Bulk insert
+            records = []
+            for _, row in clean_df.iterrows():
+                r = dict(row)
+                r["upload"] = upload_log
+                r["user"] = user
+                records.append(ProfitRecord(**r))
+
+            ProfitRecord.objects.bulk_create(records, batch_size=500)
+
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            upload_log.total_rows = len(clean_df) + len(errors) + dup_count
+            upload_log.processed_rows = len(clean_df)
+            upload_log.error_rows = len(errors)
+            upload_log.duplicate_rows = dup_count
+            upload_log.error_log = json.dumps(errors[:50], default=str)
+            upload_log.processing_time_ms = elapsed_ms
+            upload_log.status = UploadLog.Status.COMPLETED if not errors else UploadLog.Status.PARTIAL
+            upload_log.save()
+
+            results.append({
+                "file_name": file_name,
+                "message": f"Processed {len(clean_df)} profit records",
+                "processed": len(clean_df),
+                "errors": len(errors),
+                "duplicates": dup_count,
+                "time_ms": elapsed_ms,
+            })
+
+        except ProfitDataError as e:
+            upload_log.status = UploadLog.Status.FAILED
+            upload_log.error_log = json.dumps({"fatal": str(e)})
+            upload_log.save()
+            results.append({"file_name": file_name, "error": str(e)})
+        except Exception as e:
+            logger.exception(f"Profit upload crash for {file_name}")
+            upload_log.status = UploadLog.Status.FAILED
+            upload_log.save()
+            results.append({"file_name": file_name, "error": f"Processing error: {e}"})
+
+    has_dup = any(r.get("error") == "DUPLICATES_FOUND" for r in results)
+    sc = status.HTTP_409_CONFLICT if has_dup else status.HTTP_201_CREATED
+
+    if len(results) == 1:
+        return Response(results[0], status=sc)
+    return Response({"message": "Processing complete", "results": results}, status=sc)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def profit_summary(request):
+    """GET /api/profit/summary/ — Top-level profit KPIs."""
+    from .utils.profit_engine import get_profit_summary
+    qs = ProfitRecord.objects.filter(user=request.user)
+    return Response(get_profit_summary(qs))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def profit_lanes(request):
+    """GET /api/profit/lanes/ — Lane classification."""
+    from .utils.profit_engine import get_lane_classification
+    qs = ProfitRecord.objects.filter(user=request.user)
+    return Response(get_lane_classification(qs))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def profit_trends(request):
+    """GET /api/profit/trends/ — Cost-per-tonne trends by lane."""
+    from .utils.profit_engine import get_lane_trends
+    qs = ProfitRecord.objects.filter(user=request.user)
+    return Response(get_lane_trends(qs))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def profit_alerts(request):
+    """GET /api/profit/alerts/ — Smart profitability alerts."""
+    from .utils.profit_engine import get_profit_alerts
+    qs = ProfitRecord.objects.filter(user=request.user)
+    return Response(get_profit_alerts(qs))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def profit_drilldown(request):
+    """GET /api/profit/drilldown/?loading_city=X&delivery_city=Y — Lane detail."""
+    from .utils.profit_engine import get_lane_drilldown
+    qs = ProfitRecord.objects.filter(user=request.user)
+    lc = request.GET.get("loading_city", "")
+    dc = request.GET.get("delivery_city", "")
+    return Response(get_lane_drilldown(qs, loading_city=lc, delivery_city=dc))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def profit_insights(request):
+    """GET /api/profit/insights/ — Human-readable profit insights."""
+    from .utils.profit_engine import generate_profit_insights
+    qs = ProfitRecord.objects.filter(user=request.user)
+    return Response(generate_profit_insights(qs))

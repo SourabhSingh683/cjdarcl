@@ -203,3 +203,48 @@ export const getInvoiceUrl = (shipmentId) =>
   `${API_BASE}/shipments/${shipmentId}/invoice/`;
 
 
+// ─── Profit Analysis ─────────────────────────────────────────────────────────
+
+export function uploadProfitFile(files, refresh = false, onProgress = () => {}) {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    if (Array.isArray(files)) {
+      files.forEach(f => formData.append('file', f));
+    } else {
+      formData.append('file', files);
+    }
+    
+    const query = refresh ? '?refresh=true' : '';
+    const xhr = new XMLHttpRequest();
+    const token = localStorage.getItem('access_token');
+    
+    xhr.open('POST', `${API_BASE}/profit/upload/${query}`);
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100));
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText)); } catch { resolve(xhr.responseText); }
+      } else {
+        try {
+          const body = JSON.parse(xhr.responseText);
+          reject(new Error(body.error || body.detail || 'Upload failed'));
+        } catch { reject(new Error(`HTTP ${xhr.status}`)); }
+      }
+    };
+
+    xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.send(formData);
+  });
+}
+
+export const fetchProfitSummary   = () => apiFetch('/profit/summary/', {}, true);
+export const fetchProfitLanes     = () => apiFetch('/profit/lanes/', {}, true);
+export const fetchProfitTrends    = () => apiFetch('/profit/trends/', {}, true);
+export const fetchProfitAlerts    = () => apiFetch('/profit/alerts/', {}, true);
+export const fetchProfitDrilldown = (loadingCity, deliveryCity) =>
+  apiFetch(`/profit/drilldown/?loading_city=${encodeURIComponent(loadingCity)}&delivery_city=${encodeURIComponent(deliveryCity)}`, {}, true);
+export const fetchProfitInsights  = () => apiFetch('/profit/insights/', {}, true);
