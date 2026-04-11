@@ -17,6 +17,7 @@ import time
 import logging
 
 from django.db import transaction
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.pagination import PageNumberPagination
@@ -90,6 +91,39 @@ def _apply_filters(qs, params):
     return qs
 
 
+def _apply_profit_filters(qs, params):
+    """Filter ProfitRecord queryset based on GET params."""
+    if val := params.get("from"):
+        qs = qs.filter(cn_date__gte=val)
+    if val := params.get("to"):
+        qs = qs.filter(cn_date__lte=val)
+    if val := params.get("orig"):
+        qs = qs.filter(loading_city__icontains=val)
+    if val := params.get("dest"):
+        qs = qs.filter(delivery_city__icontains=val)
+    if val := params.get("cn"):
+        # Search both delivery and external no
+        qs = qs.filter(Q(sap_delivery_no__icontains=val) | Q(sap_external_no__icontains=val))
+    if val := params.get("mat"):
+        qs = qs.filter(material_name__icontains=val)
+    if val := params.get("trans"):
+        keywords = val.split()
+        for kw in keywords:
+            qs = qs.filter(service_agent__icontains=kw)
+    if val := params.get("reg"):
+        qs = qs.filter(booking_branch__icontains=val)
+    if val := params.get("cust"):
+        keywords = val.split()
+        for kw in keywords:
+            qs = qs.filter(customer_name__icontains=kw)
+    if val := params.get("margin_type"):
+        if val == "profit":
+            qs = qs.filter(gm1__gt=0)
+        elif val == "loss":
+            qs = qs.filter(gm1__lt=0)
+    return qs
+
+
 class StandardPagination(PageNumberPagination):
     page_size = 50
     page_size_query_param = "page_size"
@@ -115,7 +149,10 @@ def upload_file(request):
     # Check for refresh flag
     if request.GET.get('refresh') == 'true':
         with transaction.atomic():
-            Shipment.objects.filter(user=request.user).delete()
+            if request.user.is_superuser:
+                Shipment.objects.all().delete()
+            else:
+                Shipment.objects.filter(user=request.user).delete()
 
     results = []
     for uploaded_file in files:
@@ -241,10 +278,18 @@ def _process_single_file(uploaded_file, request):
 @permission_classes([IsAuthenticated])
 def clear_all_data(request):
     """DELETE /api/clear-data/ — Truncate user's shipment data but preserve history."""
+    user = request.user
     with transaction.atomic():
         # User requested: "only affect dashboard, analytics, intel and alerts... not history"
         # Shipments = Dashboard data. UploadLogs = History.
-        Shipment.objects.filter(user=request.user).delete()
+        if user.is_superuser:
+            # Superusers clear everything they see (including orphaned legacy records)
+            Shipment.objects.all().delete()
+            ProfitRecord.objects.all().delete()
+        else:
+            Shipment.objects.filter(user=user).delete()
+            ProfitRecord.objects.filter(user=user).delete()
+
     return Response({"message": "Dashboard data cleared successfully. History and AI templates preserved."}, status=status.HTTP_200_OK)
 
 
@@ -668,7 +713,6 @@ def ai_analyze(request):
 def profit_upload(request):
     """POST /api/profit/upload/ — Upload Gross Margin MIS Excel file."""
     from .utils.profit_data_cleaner import process_profit_file, ProfitDataError
-    from .models import ProfitRecord
 
     files = request.FILES.getlist("file")
     if not files:
@@ -681,7 +725,10 @@ def profit_upload(request):
     # Check for refresh flag
     if request.GET.get('refresh') == 'true':
         with transaction.atomic():
-            ProfitRecord.objects.filter(user=user).delete()
+            if user.is_superuser:
+                ProfitRecord.objects.all().delete()
+            else:
+                ProfitRecord.objects.filter(user=user).delete()
 
     results = []
     for uploaded_file in files:
@@ -773,7 +820,12 @@ def profit_upload(request):
 def profit_summary(request):
     """GET /api/profit/summary/ — Top-level profit KPIs."""
     from .utils.profit_engine import get_profit_summary
-    qs = ProfitRecord.objects.filter(user=request.user)
+    base_qs = ProfitRecord.objects.filter(user=request.user)
+    
+    if not base_qs.exists():
+        return Response({"error": "No profit records available."})
+        
+    qs = _apply_profit_filters(base_qs, request.GET)
     return Response(get_profit_summary(qs))
 
 
@@ -783,6 +835,7 @@ def profit_lanes(request):
     """GET /api/profit/lanes/ — Lane classification."""
     from .utils.profit_engine import get_lane_classification
     qs = ProfitRecord.objects.filter(user=request.user)
+    qs = _apply_profit_filters(qs, request.GET)
     return Response(get_lane_classification(qs))
 
 
@@ -792,6 +845,7 @@ def profit_trends(request):
     """GET /api/profit/trends/ — Cost-per-tonne trends by lane."""
     from .utils.profit_engine import get_lane_trends
     qs = ProfitRecord.objects.filter(user=request.user)
+    qs = _apply_profit_filters(qs, request.GET)
     return Response(get_lane_trends(qs))
 
 
@@ -801,18 +855,32 @@ def profit_alerts(request):
     """GET /api/profit/alerts/ — Smart profitability alerts."""
     from .utils.profit_engine import get_profit_alerts
     qs = ProfitRecord.objects.filter(user=request.user)
+    qs = _apply_profit_filters(qs, request.GET)
     return Response(get_profit_alerts(qs))
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def profit_drilldown(request):
-    """GET /api/profit/drilldown/?loading_city=X&delivery_city=Y — Lane detail."""
+    """GET /api/profit/drilldown/?loading_city=X&delivery_city=Y — Lane waterfall."""
     from .utils.profit_engine import get_lane_drilldown
-    qs = ProfitRecord.objects.filter(user=request.user)
     lc = request.GET.get("loading_city", "")
     dc = request.GET.get("delivery_city", "")
+    qs = ProfitRecord.objects.filter(user=request.user)
+    qs = _apply_profit_filters(qs, request.GET)
     return Response(get_lane_drilldown(qs, loading_city=lc, delivery_city=dc))
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def profit_lane_shipments(request):
+    """GET /api/profit/shipments/?loading_city=X&delivery_city=Y — Itemized shipments for a lane."""
+    from .utils.profit_engine import get_lane_shipment_details
+    lc = request.GET.get("loading_city", "")
+    dc = request.GET.get("delivery_city", "")
+    qs = ProfitRecord.objects.filter(user=request.user)
+    qs = _apply_profit_filters(qs, request.GET)
+    return Response(get_lane_shipment_details(qs, loading_city=lc, delivery_city=dc))
 
 
 @api_view(["GET"])
@@ -821,4 +889,6 @@ def profit_insights(request):
     """GET /api/profit/insights/ — Human-readable profit insights."""
     from .utils.profit_engine import generate_profit_insights
     qs = ProfitRecord.objects.filter(user=request.user)
+    qs = _apply_profit_filters(qs, request.GET)
     return Response(generate_profit_insights(qs))
+

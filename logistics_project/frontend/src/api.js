@@ -241,10 +241,16 @@ export function uploadProfitFile(files, refresh = false, onProgress = () => {}) 
   });
 }
 
-export const fetchProfitSummary   = () => apiFetch('/profit/summary/', {}, true);
-export const fetchProfitLanes     = () => apiFetch('/profit/lanes/', {}, true);
-export const fetchProfitTrends    = () => apiFetch('/profit/trends/', {}, true);
-export const fetchProfitAlerts    = () => apiFetch('/profit/alerts/', {}, true);
-export const fetchProfitDrilldown = (loadingCity, deliveryCity) =>
-  apiFetch(`/profit/drilldown/?loading_city=${encodeURIComponent(loadingCity)}&delivery_city=${encodeURIComponent(deliveryCity)}`, {}, true);
-export const fetchProfitInsights  = () => apiFetch('/profit/insights/', {}, true);
+export const fetchProfitSummary   = (f = {}) => apiFetch(`/profit/summary/${buildQuery(f)}`, {}, true);
+export const fetchProfitLanes     = (f = {}) => apiFetch(`/profit/lanes/${buildQuery(f)}`, {}, true);
+export const fetchProfitTrends    = (f = {}) => apiFetch(`/profit/trends/${buildQuery(f)}`, {}, true);
+export const fetchProfitAlerts    = (f = {}) => apiFetch(`/profit/alerts/${buildQuery(f)}`, {}, true);
+export const fetchProfitDrilldown = (lc, dc, f = {}) => {
+  const q = buildQuery({ ...f, loading_city: lc, delivery_city: dc });
+  return apiFetch(`/profit/drilldown/${q}`, {}, true);
+};
+export const fetchProfitLaneShipments = (lc, dc, f = {}) => {
+  const q = buildQuery({ ...f, loading_city: lc, delivery_city: dc });
+  return apiFetch(`/profit/shipments/${q}`, {}, true);
+};
+export const fetchProfitInsights = (f = {}) => apiFetch(`/profit/insights/${buildQuery(f)}`, {}, true);

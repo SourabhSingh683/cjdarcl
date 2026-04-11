@@ -44,7 +44,6 @@ const INSIGHT_ICONS = { success: '✅', warning: '⚠️', danger: '🚨', info:
 
 const NAV_ITEMS = [
   { key: 'dashboard', icon: '📊', label: 'Dashboard' },
-  { key: 'analytics', icon: '🔍', label: 'Analytics' },
   { key: 'intelligence', icon: '🚨', label: 'Alerts & Intel' },
   { key: 'profit', icon: '💰', label: 'Profit Analysis' },
   { key: 'upload', icon: '📁', label: 'Upload Data' },
@@ -53,7 +52,6 @@ const NAV_ITEMS = [
 
 const PAGE_META = {
   dashboard: { title: 'Command Center', sub: 'Real-time logistics overview and key metrics' },
-  analytics: { title: 'Deep Analytics', sub: 'Root cause analysis and risk prediction' },
   intelligence: { title: 'Operational Intelligence', sub: 'Actionable alerts and historical performance' },
   profit: { title: 'Profit Analysis', sub: 'Lane profitability, margins, and cost intelligence' },
   upload: { title: 'Upload Data', sub: 'Import your shipment files' },
@@ -132,21 +130,8 @@ function ManagerDashboard({ user, onLogout }) {
     finally { setLoading(false); }
   }, []);
 
-  const loadAnalytics = useCallback(async (f) => {
-    setLoading(true); setError(null);
-    try {
-      const [rc, rk] = await Promise.all([fetchRootCause(f), fetchRisk(f)]);
-      setRootCause(rc); setRisk(rk);
-    } catch (e) { setError(e.message); }
-    finally { setLoading(false); }
-  }, []);
-
   useEffect(() => { loadDashboard(filters); }, []);
-  useEffect(() => {
-    if (tab === 'analytics' && !rootCause) loadAnalytics(filters);
-  }, [tab]);
-
-  const handleFilter = () => { loadDashboard(filters); if (rootCause) loadAnalytics(filters); };
+  const handleFilter = () => { loadDashboard(filters); };
   const handleClear = useCallback(() => {
     const e = { date_from: '', date_to: '', origin: '', destination: '', vehicle_type: '', transporter_name: '', booking_region: '', material: '', cnno: '' };
     setFilters(e); loadDashboard(e);
@@ -218,7 +203,6 @@ function ManagerDashboard({ user, onLogout }) {
 
         <main className="main-content">
           {tab === 'dashboard' && <DashboardView {...{ summary, revenueTrends, topRoutes, transporterPerformance, loading, error, filters, setFilters, cnMatches }} onFilter={handleFilter} onClear={handleClear} onDrilldown={openDrilldown} />}
-          {tab === 'analytics' && <AnalyticsView rootCause={rootCause} risk={risk} loading={loading} error={error} summary={summary} onDrilldown={openDrilldown} />}
           {tab === 'intelligence' && <OperationalIntelligence filters={filters} />}
           {tab === 'profit' && <ProfitAnalysis />}
           {tab === 'upload' && <UploadView onUploadDone={() => { setRootCause(null); setRisk(null); loadDashboard(filters); setTab('dashboard'); }} onProfitUploadDone={() => setTab('profit')} />}

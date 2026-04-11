@@ -17,6 +17,7 @@ logger = logging.getLogger("shipments")
 # Excel column → model field mapping
 COLUMN_MAP = {
     "SAPDelivery No": "sap_delivery_no",
+    "SAPExternal No": "sap_external_no",
     "CNDate": "cn_date",
     "Podat": "pod_date",
     "Booking Branch": "booking_branch",
@@ -168,8 +169,23 @@ def process_profit_file(uploaded_file, file_name: str) -> Tuple[pd.DataFrame, Li
             ]
             for nf in numeric_fields:
                 val = record.get(nf)
-                if val is None or pd.isna(val) if isinstance(val, float) else False:
+                if val is None or (isinstance(val, float) and pd.isna(val)):
                     record[nf] = 0
+                else:
+                    try:
+                        record[nf] = float(val)
+                    except (ValueError, TypeError):
+                        record[nf] = 0
+
+            # Weight Normalization: If charge_weight > 50, assume it's in KG and convert to Tonnes
+            cw = record.get("charge_weight", 0)
+            if cw > 50:
+                record["charge_weight"] = cw / 1000.0
+                # Optionally normalize net/gross if they are also high
+                for w_field in ["net_weight", "gross_weight"]:
+                    wv = record.get(w_field, 0)
+                    if wv > 50:
+                        record[w_field] = wv / 1000.0
 
             # Ensure string fields default to ""
             string_fields = [
@@ -182,7 +198,11 @@ def process_profit_file(uploaded_file, file_name: str) -> Tuple[pd.DataFrame, Li
                 if val is None or (isinstance(val, float) and pd.isna(val)):
                     record[sf] = ""
                 else:
-                    record[sf] = str(val).strip()
+                    val = str(val).strip()
+                    # Normalization: TATA STEEL LIMITED-JAMSHEDPUR -> TSL-jamshedpur
+                    if sf == "customer_name" and val == "TATA STEEL LIMITED-JAMSHEDPUR":
+                        val = "TATA STEEL LIMITED"
+                    record[sf] = val
 
             clean_rows.append(record)
 

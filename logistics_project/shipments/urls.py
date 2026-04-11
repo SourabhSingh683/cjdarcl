@@ -49,5 +49,6 @@ urlpatterns = [
     path("profit/trends/", views.profit_trends, name="profit-trends"),
     path("profit/alerts/", views.profit_alerts, name="profit-alerts"),
     path("profit/drilldown/", views.profit_drilldown, name="profit-drilldown"),
+    path("profit/shipments/", views.profit_lane_shipments, name="profit-shipments"),
     path("profit/insights/", views.profit_insights, name="profit-insights"),
 ]

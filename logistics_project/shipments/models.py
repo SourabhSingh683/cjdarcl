@@ -258,6 +258,10 @@ class ProfitRecord(models.Model):
         max_length=100, db_index=True,
         help_text="SAP Delivery Number — primary identifier from MIS report",
     )
+    sap_external_no = models.CharField(
+        max_length=100, db_index=True, blank=True, default="",
+        help_text="SAP External Number from MIS report",
+    )
 
     # --- Relationships ---
     upload = models.ForeignKey(
