@@ -15,7 +15,15 @@ SECRET_KEY = os.environ.get(
 
 DEBUG = os.environ.get("DJANGO_DEBUG", "True").lower() in ("true", "1", "yes")
 
-ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "*").split(",")
+# ALLOWED_HOSTS: Always allow localhost, plus any env-defined hosts, 
+# and automatically include the Render external hostname.
+ALLOWED_HOSTS = ["localhost", "127.0.0.1", "0.0.0.0"]
+render_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+if render_host:
+    ALLOWED_HOSTS.append(render_host)
+env_hosts = os.environ.get("DJANGO_ALLOWED_HOSTS")
+if env_hosts:
+    ALLOWED_HOSTS.extend([h.strip() for h in env_hosts.split(",")])
 
 # ---------------------------------------------------------------------------
 # Application definition
@@ -178,12 +186,17 @@ SIMPLE_JWT = {
 }
 
 # ---------------------------------------------------------------------------
-# CORS — allow React dev server
+# CORS — allow React dev server and production frontend
 # ---------------------------------------------------------------------------
-CORS_ALLOWED_ORIGINS = os.environ.get(
-    "CORS_ALLOWED_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173",
-).split(",")
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://cjdarcl.vercel.app",
+]
+env_cors = os.environ.get("CORS_ALLOWED_ORIGINS")
+if env_cors:
+    CORS_ALLOWED_ORIGINS.extend([o.strip() for o in env_cors.split(",")])
+
 CORS_ALLOW_ALL_ORIGINS = DEBUG  # Convenience for local dev
 
 # ---------------------------------------------------------------------------
