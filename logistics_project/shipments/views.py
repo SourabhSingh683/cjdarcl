@@ -176,6 +176,10 @@ def upload_file(request):
     if len(results) == 1:
         return Response(results[0], status=status_code)
     
+    # Explicitly clear memory after loop
+    import gc
+    gc.collect()
+
     return Response({
         "message": "Processing complete",
         "results": results
@@ -809,6 +813,10 @@ def profit_upload(request):
 
     has_dup = any(r.get("error") == "DUPLICATES_FOUND" for r in results)
     sc = status.HTTP_409_CONFLICT if has_dup else status.HTTP_201_CREATED
+
+    # Explicitly clear memory after loop
+    import gc
+    gc.collect()
 
     if len(results) == 1:
         return Response(results[0], status=sc)

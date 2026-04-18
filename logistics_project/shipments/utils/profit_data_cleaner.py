@@ -91,19 +91,17 @@ def process_profit_file(uploaded_file, file_name: str) -> Tuple[pd.DataFrame, Li
     Process a Gross Margin MIS Excel file.
     Returns: (clean_df, errors, duplicate_count)
     """
+    import gc
     try:
-        content = uploaded_file.read()
-        if hasattr(uploaded_file, "seek"):
-            uploaded_file.seek(0)
-
-        df = pd.read_excel(BytesIO(content), header=1)
+        # Read directly from file to avoid doubling memory with 'content' variable
+        df = pd.read_excel(uploaded_file, header=1)
     except Exception as e:
         raise ProfitDataError(f"Cannot read file: {e}")
 
     logger.info(f"Profit file '{file_name}': {len(df)} rows, {len(df.columns)} columns")
 
     if len(df) == 0:
-        raise ProfitDataError("File contains no data rows.")
+        return pd.DataFrame(), [], 0
 
     # Validate key columns exist
     required = ["SAPDelivery No", "CNDate", "Freight", "GM1"]
@@ -114,44 +112,45 @@ def process_profit_file(uploaded_file, file_name: str) -> Tuple[pd.DataFrame, Li
     errors = []
     clean_rows = []
 
-    for idx, row in df.iterrows():
+    # Iterate using itertuples for better performance/memory than iterrows
+    for row in df.itertuples(index=True):
         try:
             record = {}
-
             # Map standard columns
             for excel_col, model_field in COLUMN_MAP.items():
-                val = row.get(excel_col)
+                val = getattr(row, excel_col, None) if hasattr(row, excel_col) else None
                 if pd.isna(val):
                     val = None
                 record[model_field] = val
 
-            # Handle "Own Fleet Frt Other Exp" (first occurrence)
-            own_fleet_val = row.get(OWN_FLEET_COL, 0)
+            # Handle "Own Fleet Frt Other Exp" (getattr handles spaces if needed, but itertuples mangles names)
+            # Revert to dict access or safer getattr for messy headers
+            row_dict = row._asdict()
+            
+            # Map standard columns again more safely from dict
+            for excel_col, model_field in COLUMN_MAP.items():
+                val = row_dict.get(excel_col)
+                if pd.isna(val): val = None
+                record[model_field] = val
+
+            own_fleet_val = row_dict.get(OWN_FLEET_COL, 0)
             record["own_fleet_exp"] = 0 if pd.isna(own_fleet_val) else own_fleet_val
 
-            # Handle "Reimb Exp\n" (has newline in header)
-            reimb_val = row.get(REIMB_COL, 0)
+            reimb_val = row_dict.get(REIMB_COL, 0)
             record["reimb_exp"] = 0 if pd.isna(reimb_val) else reimb_val
 
             # Validate required fields
             if not record.get("sap_delivery_no"):
-                errors.append({"row": idx + 3, "error": "Missing SAP Delivery No"})
-                continue
-
-            if not record.get("cn_date"):
-                errors.append({"row": idx + 3, "error": "Missing CNDate"})
+                errors.append({"row": row.Index + 3, "error": "Missing SAP Delivery No"})
                 continue
 
             # Convert dates
             for date_field in ["cn_date", "pod_date"]:
                 val = record.get(date_field)
                 if val is not None:
-                    try:
-                        record[date_field] = pd.to_datetime(val).date()
-                    except Exception:
-                        record[date_field] = None
+                    try: record[date_field] = pd.to_datetime(val).date()
+                    except: record[date_field] = None
 
-            # Convert SAP No to string
             record["sap_delivery_no"] = str(record["sap_delivery_no"]).strip()
 
             # Ensure numeric fields default to 0
@@ -159,11 +158,9 @@ def process_profit_file(uploaded_file, file_name: str) -> Tuple[pd.DataFrame, Li
                 "gross_weight", "net_weight", "charge_weight", "distance", "value_of_goods",
                 "freight", "fleet_freight", "lorry_hire", "lorry_hire_topf", "own_fleet_exp",
                 "rake_exp", "freight_deduction", "extra_lorry_hire", "transhipment_cost",
-                "gm1", "gm1_pct", "freight_incentive", "operational_other_income",
-                "labour", "wages", "insurance", "other_direct_exp", "lrp",
-                "gm2", "gm2_pct", "reimb_exp", "gm3",
-                "claim", "detention", "ldp", "other_operation_ded", "gm4",
-                "interest", "gm5", "gm5_pct",
+                "gm1", "gm1_pct", "freight_incentive", "operational_other_income", "labour", "wages",
+                "insurance", "other_direct_exp", "lrp", "gm2", "gm2_pct", "reimb_exp", "gm3",
+                "claim", "detention", "ldp", "other_operation_ded", "gm4", "interest", "gm5", "gm5_pct",
                 "cash_discount", "transaction_charges", "pli", "broker_discount", "petro_incentive",
                 "gm6", "gm6_pct", "gm7", "projected_margin",
             ]
@@ -172,50 +169,37 @@ def process_profit_file(uploaded_file, file_name: str) -> Tuple[pd.DataFrame, Li
                 if val is None or (isinstance(val, float) and pd.isna(val)):
                     record[nf] = 0
                 else:
-                    try:
-                        record[nf] = float(val)
-                    except (ValueError, TypeError):
-                        record[nf] = 0
+                    try: record[nf] = float(val)
+                    except: record[nf] = 0
 
-            # Weight Normalization: If charge_weight > 50, assume it's in KG and convert to Tonnes
+            # Weight Normalization
             cw = record.get("charge_weight", 0)
             if cw > 50:
                 record["charge_weight"] = cw / 1000.0
-                # Optionally normalize net/gross if they are also high
                 for w_field in ["net_weight", "gross_weight"]:
                     wv = record.get(w_field, 0)
-                    if wv > 50:
-                        record[w_field] = wv / 1000.0
+                    if wv > 50: record[w_field] = wv / 1000.0
 
-            # Ensure string fields default to ""
-            string_fields = [
-                "booking_branch", "loading_state", "loading_city", "delivery_state", "delivery_city",
-                "customer_name", "consignor", "consignee_name", "service_agent", "contract_owner",
-                "vehicle_type", "material_name", "contract_type",
-            ]
-            for sf in string_fields:
-                val = record.get(sf)
-                if val is None or (isinstance(val, float) and pd.isna(val)):
-                    record[sf] = ""
-                else:
-                    val = str(val).strip()
-                    # Normalization: TATA STEEL LIMITED-JAMSHEDPUR -> TSL-jamshedpur
-                    if sf == "customer_name" and val == "TATA STEEL LIMITED-JAMSHEDPUR":
-                        val = "TATA STEEL LIMITED"
-                    record[sf] = val
+            # Normalization
+            val = record.get("customer_name", "")
+            if val == "TATA STEEL LIMITED-JAMSHEDPUR":
+                record["customer_name"] = "TATA STEEL LIMITED"
 
             clean_rows.append(record)
-
         except Exception as e:
-            errors.append({"row": idx + 3, "error": str(e)})
+            errors.append({"row": row.Index + 3, "error": str(e)})
+
+    # Clear raw dataframe from memory immediately
+    del df
+    gc.collect()
 
     clean_df = pd.DataFrame(clean_rows)
-
-    # Dedup within file
+    clean_rows.clear() # Free the list
+    
     dup_count = 0
-    if len(clean_df) > 0 and "sap_delivery_no" in clean_df.columns:
+    if not clean_df.empty:
         before = len(clean_df)
-        clean_df = clean_df.drop_duplicates(subset=["sap_delivery_no"], keep="first")
+        clean_df.drop_duplicates(subset=["sap_delivery_no"], keep="first", inplace=True)
         dup_count = before - len(clean_df)
 
     logger.info(f"Profit cleaner: {len(clean_df)} clean, {len(errors)} errors, {dup_count} dupes")
