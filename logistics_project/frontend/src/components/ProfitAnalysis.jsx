@@ -556,9 +556,17 @@ export default function ProfitAnalysis() {
               <div className="chart-header"><div><div className="chart-title">Lane Health Distribution</div><div className="chart-subtitle">Classification of all routes</div></div></div>
               {pieData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={280}>
-                  <PieChart>
-                    <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} dataKey="value" labelLine={false}
-                      label={({ name, value }) => `${name}: ${value}`}>
+                  <PieChart margin={{ top: 20, right: 30, left: 30, bottom: 20 }}>
+                    <Pie 
+                      data={pieData} 
+                      cx="50%" 
+                      cy="50%" 
+                      innerRadius={70} 
+                      outerRadius={90} 
+                      dataKey="value" 
+                      labelLine={false}
+                      label={({ name, value }) => `${name}: ${value}`}
+                    >
                       {pieData.map((e, i) => <Cell key={i} fill={e.color} />)}
                     </Pie>
                     <Tooltip />
