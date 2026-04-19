@@ -341,12 +341,12 @@ def reprocess_upload(request, upload_id):
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-@transaction.atomic
 def _bulk_insert_shipments(df, upload_log, user):
-    """Bulk-insert with cross-file dedup on shipment_id."""
-    # Routes
+    """Bulk-insert with cross-file dedup on shipment_id. Optimized for speed."""
+    import gc
+
+    # 1. Routes — batch create missing ones
     route_pairs = df[["origin", "destination"]].drop_duplicates().values.tolist()
-    # Optimize Routes: Pre-fetch based on origin and dest lists
     route_origins = [o for o, d in route_pairs]
     route_dests = [d for o, d in route_pairs]
     existing_routes = Route.objects.filter(origin__in=route_origins, destination__in=route_dests)
@@ -356,30 +356,32 @@ def _bulk_insert_shipments(df, upload_log, user):
     for origin, destination in route_pairs:
         if (origin, destination) not in route_cache:
             missing_routes.append(Route(origin=origin, destination=destination))
-            route_cache[(origin, destination)] = None  # mark as visited to prevent duplicates
 
     if missing_routes:
-        # ignore_conflicts isn't strictly needed if we generated missing properly,
-        # but it protects against concurrent uploads
         Route.objects.bulk_create(missing_routes, ignore_conflicts=True)
-        existing_new = Route.objects.filter(origin__in=route_origins, destination__in=route_dests)
-        for r in existing_new:
+        for r in Route.objects.filter(origin__in=route_origins, destination__in=route_dests):
             route_cache[(r.origin, r.destination)] = r
 
-    # Pre-fetch existing shipments for upsert
+    # 2. Pre-fetch existing shipments for upsert
     incoming_ids = set(df["shipment_id"].tolist())
-    existing_shipments_list = list(Shipment.objects.filter(shipment_id__in=incoming_ids))
-    existing_shipments = {s.shipment_id: s for s in existing_shipments_list}
+    existing_shipments = {
+        s.shipment_id: s
+        for s in Shipment.objects.filter(shipment_id__in=incoming_ids)
+    }
 
+    # 3. Build shipment objects using fast dict iteration (not iterrows)
     to_create, to_update = [], []
-    for _, row in df.iterrows():
-        route = route_cache[(row["origin"], row["destination"])]
-        data = _build_shipment_data(row, route, upload_log, user)
+    records = df.to_dict("records")
 
+    for row in records:
+        route = route_cache.get((row["origin"], row["destination"]))
+        if not route:
+            continue
+        data = _build_shipment_data(row, route, upload_log, user)
         sid = row["shipment_id"]
+
         if sid in existing_shipments:
             shipment = existing_shipments[sid]
-            # Verify ownership before updating
             if shipment.user == user or user.is_superuser:
                 for key, value in data.items():
                     if key != "shipment_id":
@@ -388,67 +390,104 @@ def _bulk_insert_shipments(df, upload_log, user):
         else:
             to_create.append(Shipment(**data))
 
-    if to_create:
-        Shipment.objects.bulk_create(to_create, batch_size=500)
+    # 4. Bulk create in smaller batches to avoid memory spikes
+    BATCH = 300
+    for i in range(0, len(to_create), BATCH):
+        Shipment.objects.bulk_create(to_create[i:i + BATCH], batch_size=BATCH)
+
     if to_update:
-        Shipment.objects.bulk_update(to_update, fields=[
-            "route", "upload", "user", "dispatch_date", "delivery_date",
-            "expected_delivery_date", "vehicle_type", "vehicle_no",
-            "revenue", "rate_per_mt", "total_amount", "freight_deduction",
-            "penalty", "amount_receivable", "net_weight", "gross_weight",
-            "charge_weight", "shortage", "transit_permissible", "transit_taken",
-            "delay_days", "is_on_time", "has_shortage", "has_penalty",
-            "total_distance", "pod_status", "billing_status",
-            "customer_name", "transporter_name", "booking_region", "contract_id", "material_type",
-            "consignor_name", "consignee_name",
-        ], batch_size=500)
+        for i in range(0, len(to_update), BATCH):
+            Shipment.objects.bulk_update(to_update[i:i + BATCH], fields=[
+                "route", "upload", "user", "dispatch_date", "delivery_date",
+                "expected_delivery_date", "vehicle_type", "vehicle_no",
+                "revenue", "rate_per_mt", "total_amount", "freight_deduction",
+                "penalty", "amount_receivable", "net_weight", "gross_weight",
+                "charge_weight", "shortage", "transit_permissible", "transit_taken",
+                "delay_days", "is_on_time", "has_shortage", "has_penalty",
+                "total_distance", "pod_status", "billing_status",
+                "customer_name", "transporter_name", "booking_region", "contract_id", "material_type",
+                "consignor_name", "consignee_name",
+            ], batch_size=BATCH)
+
+    # Free memory
+    del to_create, to_update, records
+    gc.collect()
 
 
 def _build_shipment_data(row, route, upload_log, user):
-    """Build shipment dict from a cleaned DataFrame row."""
-    import pandas as pd
+    """Build shipment dict from a cleaned DataFrame row (dict or Series)."""
+    import math
+
+    def _is_na(val):
+        if val is None:
+            return True
+        try:
+            return math.isnan(val)
+        except (TypeError, ValueError):
+            return False
 
     def _safe_date(val):
-        if pd.isna(val):
+        if _is_na(val):
             return None
         return val.date() if hasattr(val, "date") else val
+
+    def _safe_float(val, default=0):
+        if _is_na(val):
+            return default
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return default
+
+    def _safe_int(val, default=0):
+        if _is_na(val):
+            return default
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return default
+
+    def _safe_str(val, max_len=255, default=""):
+        if _is_na(val) or str(val).lower() in ("nan", "none", ""):
+            return default
+        return str(val)[:max_len]
 
     return {
         "shipment_id": row["shipment_id"],
         "route": route,
         "upload": upload_log,
         "user": user,
-        "dispatch_date": _safe_date(row["dispatch_date"]),
+        "dispatch_date": _safe_date(row.get("dispatch_date")),
         "delivery_date": _safe_date(row.get("delivery_date")),
         "expected_delivery_date": _safe_date(row.get("expected_delivery_date")),
-        "vehicle_type": row.get("vehicle_type", "other"),
-        "vehicle_no": row.get("vehicle_no", ""),
-        "revenue": float(row.get("revenue", 0)),
-        "rate_per_mt": float(row.get("rate_per_mt", 0)),
-        "total_amount": float(row.get("total_amount", 0)),
-        "freight_deduction": float(row.get("freight_deduction", 0)),
-        "penalty": float(row.get("penalty", 0)),
-        "amount_receivable": float(row.get("amount_receivable", 0)),
-        "net_weight": float(row.get("net_weight", 0)),
-        "gross_weight": float(row.get("gross_weight", 0)),
-        "charge_weight": float(row.get("charge_weight", 0)),
-        "shortage": float(row.get("shortage", 0)),
-        "transit_permissible": int(row.get("transit_permissible", 0)),
-        "transit_taken": int(row.get("transit_taken", 0)),
-        "delay_days": int(row.get("delay_days", 0)),
+        "vehicle_type": _safe_str(row.get("vehicle_type"), 50, "other"),
+        "vehicle_no": _safe_str(row.get("vehicle_no"), 50, ""),
+        "revenue": _safe_float(row.get("revenue")),
+        "rate_per_mt": _safe_float(row.get("rate_per_mt")),
+        "total_amount": _safe_float(row.get("total_amount")),
+        "freight_deduction": _safe_float(row.get("freight_deduction")),
+        "penalty": _safe_float(row.get("penalty")),
+        "amount_receivable": _safe_float(row.get("amount_receivable")),
+        "net_weight": _safe_float(row.get("net_weight")),
+        "gross_weight": _safe_float(row.get("gross_weight")),
+        "charge_weight": _safe_float(row.get("charge_weight")),
+        "shortage": _safe_float(row.get("shortage")),
+        "transit_permissible": _safe_int(row.get("transit_permissible")),
+        "transit_taken": _safe_int(row.get("transit_taken")),
+        "delay_days": _safe_int(row.get("delay_days")),
         "is_on_time": bool(row.get("is_on_time", True)),
         "has_shortage": bool(row.get("has_shortage", False)),
         "has_penalty": bool(row.get("has_penalty", False)),
-        "total_distance": float(row.get("total_distance", 0)) if pd.notna(row.get("total_distance")) else None,
-        "pod_status": str(row.get("pod_status", ""))[:50] if pd.notna(row.get("pod_status")) else "",
-        "billing_status": str(row.get("billing_status", ""))[:50] if pd.notna(row.get("billing_status")) else "",
-        "customer_name": str(row.get("customer_name", ""))[:255] if pd.notna(row.get("customer_name")) else "",
-        "transporter_name": str(row.get("transporter_name", ""))[:255] if pd.notna(row.get("transporter_name")) else "",
-        "booking_region": str(row.get("booking_region", ""))[:100] if pd.notna(row.get("booking_region")) else "",
-        "contract_id": str(row.get("contract_id", ""))[:100] if pd.notna(row.get("contract_id")) else "",
-        "material_type": str(row.get("material_type", ""))[:150] if pd.notna(row.get("material_type")) else "",
-        "consignor_name": str(row.get("consignor_name", ""))[:255] if pd.notna(row.get("consignor_name")) else "",
-        "consignee_name": str(row.get("consignee_name", ""))[:255] if pd.notna(row.get("consignee_name")) else "",
+        "total_distance": _safe_float(row.get("total_distance"), None) if not _is_na(row.get("total_distance")) else None,
+        "pod_status": _safe_str(row.get("pod_status"), 50, ""),
+        "billing_status": _safe_str(row.get("billing_status"), 50, ""),
+        "customer_name": _safe_str(row.get("customer_name"), 255, ""),
+        "transporter_name": _safe_str(row.get("transporter_name"), 255, ""),
+        "booking_region": _safe_str(row.get("booking_region"), 100, ""),
+        "contract_id": _safe_str(row.get("contract_id"), 100, ""),
+        "material_type": _safe_str(row.get("material_type"), 150, ""),
+        "consignor_name": _safe_str(row.get("consignor_name"), 255, ""),
+        "consignee_name": _safe_str(row.get("consignee_name"), 255, ""),
     }
 
 

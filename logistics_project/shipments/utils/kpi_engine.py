@@ -153,11 +153,11 @@ def get_full_root_cause(qs=None):
 
     # Aggregates for shortages/penalties
     shortage_stats = qs.aggregate(
-        total_shortage=Sum("shortage_mt"),
+        total_shortage=Sum("shortage"),
         shortage_count=Count("id", filter=Q(has_shortage=True))
     )
     penalty_stats = qs.aggregate(
-        total_penalty=Sum("penalty_amount"),
+        total_penalty=Sum("penalty"),
         penalty_count=Count("id", filter=Q(has_penalty=True))
     )
 
