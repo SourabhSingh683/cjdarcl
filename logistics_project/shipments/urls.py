@@ -35,6 +35,7 @@ urlpatterns = [
     path("uploads/", views.upload_history, name="upload-history"),
     path("uploads/bulk-delete/", views.bulk_delete_uploads, name="bulk-delete-uploads"),
     path("uploads/<int:upload_id>/", views.delete_upload, name="delete-upload"),
+    path("uploads/<int:upload_id>/status/", views.upload_status, name="upload-status"),
     path("uploads/<int:upload_id>/reprocess/", views.reprocess_upload, name="reprocess-upload"),
     path("shipments/", views.shipment_list, name="shipment-list"),
     path("clear-data/", views.clear_all_data, name="clear-all-data"),

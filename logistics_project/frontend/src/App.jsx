@@ -5,7 +5,7 @@ import {
   fetchUploadHistory, fetchRootCause, fetchRisk,
   fetchQuality, fetchDrilldown, uploadFile, uploadFileWithProgress, deleteUpload, fetchShipments,
   getInvoiceUrl,
-  clearAllData, reprocessUpload, bulkDeleteUploads, uploadProfitFile
+  clearAllData, reprocessUpload, bulkDeleteUploads, uploadProfitFile, pollUploadStatus
 } from './api';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -971,19 +971,38 @@ function UploadView({ onUploadDone, onProfitUploadDone }) {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [showLoveMessage, setShowLoveMessage] = useState(false);
 
+  const [processingStatus, setProcessingStatus] = useState(null);
+
   const handleFiles = async (fileList, forceRefresh = false) => {
     const files = Array.from(fileList || pendingFiles);
     if (files.length === 0) return;
-    setUploading(true); setResult(null); setError(null); setDuplicateError(null); setUploadProgress(0);
+    setUploading(true); setResult(null); setError(null); setDuplicateError(null); setUploadProgress(0); setProcessingStatus(null);
     try {
       let res;
       if (uploadType === 'profit') {
+        // Profit uploads: use XHR with progress (smaller files, faster)
         res = await uploadProfitFile(files, forceRefresh, (p) => setUploadProgress(p));
       } else {
-        res = await uploadFileWithProgress(files, forceRefresh, (p) => setUploadProgress(p));
+        // Billing uploads: upload file → get 202 → poll for completion
+        setUploadProgress(50);
+        res = await uploadFileWithProgress(files, forceRefresh, (p) => setUploadProgress(Math.min(p, 50)));
+        
+        // Check if server returned 202 with upload_id (background processing)
+        if (res.upload_id && (res.status === 'processing' || !res.processed_rows)) {
+          setUploadProgress(100);
+          setProcessingStatus('Server is processing your data...');
+          
+          // Poll until done
+          res = await pollUploadStatus(res.upload_id, (progress) => {
+            if (progress.status === 'processing') {
+              setProcessingStatus(`Processing on server... (check ${progress.attempt})`);
+            }
+          });
+        }
       }
       setResult(res);
       setPendingFiles(null);
+      setProcessingStatus(null);
       setShowLoveMessage(true);
       setTimeout(() => {
         setShowLoveMessage(false);
@@ -994,7 +1013,8 @@ function UploadView({ onUploadDone, onProfitUploadDone }) {
         }
       }, 2000);
     } catch (e) {
-      if (e.message.includes('DUPLICATES_FOUND') || e.message.includes('Duplicate records detected') || e.message.includes('profit records already')) {
+      setProcessingStatus(null);
+      if (e.message.includes('DUPLICATES_FOUND') || e.message.includes('Duplicate records detected') || e.message.includes('profit records already') || e.message.includes('already exist')) {
         setDuplicateError(e.message);
         setPendingFiles(fileList);
       } else {
@@ -1103,11 +1123,11 @@ function UploadView({ onUploadDone, onProfitUploadDone }) {
         )}
 
         <div className="upload-icon">{uploading ? '⏳' : uploadType === 'profit' ? '💰' : '📁'}</div>
-        <div className="upload-title">{uploading ? (uploadProgress < 100 ? `Uploading... ${uploadProgress}%` : 'Server is processing your data...') : `Drop your ${uploadType === 'profit' ? 'Gross Margin MIS' : 'Billing'} file(s) here`}</div>
-        <div className="upload-subtitle">{uploading && uploadProgress >= 100 ? 'This may take up to a minute for large files. Please do not close this page.' : 'Supports .xlsx, .xls, .csv files (max 10MB each)'}</div>
+        <div className="upload-title">{uploading ? (processingStatus || (uploadProgress < 100 ? `Uploading... ${uploadProgress}%` : 'Server is processing your data...')) : `Drop your ${uploadType === 'profit' ? 'Gross Margin MIS' : 'Billing'} file(s) here`}</div>
+        <div className="upload-subtitle">{uploading && (processingStatus || uploadProgress >= 100) ? 'This may take up to 2 minutes for large files. Please do not close this page.' : 'Supports .xlsx, .xls, .csv files (max 10MB each)'}</div>
         {uploading && (
           <div className="progress-bar-container" style={{ width: '80%', height: '8px', background: 'rgba(59,130,246,0.1)', borderRadius: '99px', marginTop: '1.5rem', overflow: 'hidden' }}>
-            <div className="progress-bar-fill" style={{ width: uploadProgress >= 100 ? '100%' : `${uploadProgress}%`, height: '100%', background: uploadType === 'profit' ? 'linear-gradient(90deg, #10b981, #059669)' : 'linear-gradient(90deg, #3b82f6, #8b5cf6)', transition: 'width 0.3s ease-out', animation: uploadProgress >= 100 ? 'pulse 1.5s ease-in-out infinite' : 'none' }} />
+            <div className="progress-bar-fill" style={{ width: uploadProgress >= 100 || processingStatus ? '100%' : `${uploadProgress}%`, height: '100%', background: uploadType === 'profit' ? 'linear-gradient(90deg, #10b981, #059669)' : 'linear-gradient(90deg, #3b82f6, #8b5cf6)', transition: 'width 0.3s ease-out', animation: (uploadProgress >= 100 || processingStatus) ? 'pulse 1.5s ease-in-out infinite' : 'none' }} />
           </div>
         )}
         <input id="file-input" className="upload-input" type="file" accept=".xlsx,.xls,.csv" multiple onChange={e => handleFiles(e.target.files)} />

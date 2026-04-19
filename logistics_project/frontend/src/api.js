@@ -115,6 +115,31 @@ export async function uploadFile(files, refresh = false) {
 }
 
 /**
+ * Poll upload status until processing completes.
+ * Returns the final status object.
+ */
+export async function pollUploadStatus(uploadId, onProgress = () => {}, intervalMs = 3000, maxAttempts = 60) {
+  for (let i = 0; i < maxAttempts; i++) {
+    const res = await apiFetch(`/uploads/${uploadId}/status/`);
+    const s = res.status;
+    
+    // Update progress for UI
+    if (s === 'processing') {
+      onProgress({ status: 'processing', attempt: i + 1 });
+    } else if (s === 'completed' || s === 'partial') {
+      onProgress({ status: 'done' });
+      return res;
+    } else if (s === 'failed') {
+      throw new Error(res.error_details?.fatal || res.error_details || 'Processing failed on server');
+    }
+    
+    // Wait before next poll
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  throw new Error('Processing timed out. Check History for status.');
+}
+
+/**
  * Upload file with real-time progress tracking
  */
 export function uploadFileWithProgress(files, refresh = false, onProgress = () => {}) {

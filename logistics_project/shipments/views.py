@@ -15,6 +15,8 @@ Endpoints:
 import json
 import time
 import logging
+import threading
+from io import BytesIO
 
 from django.db import transaction
 from django.db.models import Q
@@ -137,97 +139,105 @@ class StandardPagination(PageNumberPagination):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def upload_file(request):
-    """POST /api/upload/ — Upload one or more Excel/CSV files with full processing."""
-    # We support both 'file' (single) and 'files' (multiple)
+    """POST /api/upload/ — Upload files. Returns 202 immediately, processes in background."""
     files = request.FILES.getlist("file")
     if not files:
         files = request.FILES.getlist("files")
-    
     if not files:
         return Response({"error": "No files provided"}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Check for refresh flag
-    if request.GET.get('refresh') == 'true':
+    is_refresh = request.GET.get('refresh') == 'true'
+    user = request.user
+
+    # Check for refresh flag — clear existing data first
+    if is_refresh:
         with transaction.atomic():
-            if request.user.is_superuser:
+            if user.is_superuser:
                 Shipment.objects.all().delete()
             else:
-                Shipment.objects.filter(user=request.user).delete()
+                Shipment.objects.filter(user=user).delete()
 
-    results = []
-    for uploaded_file in files:
-        try:
-            result = _process_single_file(uploaded_file, request)
-            results.append(result)
-        except Exception as e:
-            logger.exception(f"Crash in upload loop for {uploaded_file.name}")
-            results.append({
-                "file_name": uploaded_file.name,
-                "error": "Internal processor crash",
-                "details": str(e)
-            })
-
-    # If any file reported duplicates and we didn't refresh, the frontend will see it
-    has_error = any("error" in r for r in results)
-    status_code = status.HTTP_207_MULTI_STATUS if (has_error and len(results) > 1) else status.HTTP_201_CREATED
-    if any(r.get("error") == "DUPLICATES_FOUND" for r in results):
-        status_code = status.HTTP_409_CONFLICT
-    
-    if len(results) == 1:
-        return Response(results[0], status=status_code)
-    
-    # Explicitly clear memory after loop
-    import gc
-    gc.collect()
-
-    return Response({
-        "message": "Processing complete",
-        "results": results
-    }, status=status_code)
-
-
-def _process_single_file(uploaded_file, request):
-    """Helper to process a single uploaded file and return the result dict."""
-    user = request.user
+    # Read file content into memory NOW (before request closes)
+    uploaded_file = files[0]  # Process one file at a time
     file_name = uploaded_file.name
-    # Ensure file pointer is at start
-    if hasattr(uploaded_file, "seek"):
-        uploaded_file.seek(0)
+    file_content = uploaded_file.read()
 
-    # 1. Pre-cleaning check for duplicates if refresh is not requested
-    # We only do this if the user hasn't already asked to force a refresh
-    is_refresh = request.GET.get('refresh') == 'true'
-
+    # Create upload log immediately
+    uploaded_file.seek(0)
     upload_log = UploadLog.objects.create(
         file_name=file_name, status=UploadLog.Status.PROCESSING,
         original_file=uploaded_file, user=user
     )
-    # ⚠️ CRITICAL: UploadLog creation reads the whole file to save it.
-    # We must seek back to 0 so process_file doesn't see an empty file.
-    if hasattr(uploaded_file, "seek"):
-        uploaded_file.seek(0)
-    
-    start_time = time.time()
+
+    # Check for duplicates (quick check before background processing)
+    if not is_refresh:
+        from .utils.data_cleaner import read_file, auto_map_columns
+        try:
+            import pandas as pd
+            df_check = read_file(BytesIO(file_content), file_name)
+            mapped, _ = auto_map_columns(df_check)
+            if "shipment_id" in mapped:
+                sid_col = mapped["shipment_id"]
+                sample_ids = set(df_check[sid_col].dropna().astype(str).str.strip().head(100).tolist())
+                existing_count = Shipment.objects.filter(user=user, shipment_id__in=sample_ids).count()
+                if existing_count > 0:
+                    upload_log.status = UploadLog.Status.FAILED
+                    upload_log.error_log = json.dumps({"fatal": "Duplicate records detected in system."})
+                    upload_log.save()
+                    return Response({
+                        "file_name": file_name,
+                        "error": "DUPLICATES_FOUND",
+                        "duplicate_count": existing_count,
+                        "message": "This file contains shipments that already exist. Use Start Refresh."
+                    }, status=status.HTTP_409_CONFLICT)
+            del df_check
+        except Exception:
+            pass  # If check fails, proceed with processing anyway
+
+    # Start background processing thread
+    thread = threading.Thread(
+        target=_process_upload_in_background,
+        args=(file_content, file_name, upload_log.pk, user.pk, is_refresh),
+        daemon=True
+    )
+    thread.start()
+
+    # Return immediately with upload_id for polling
+    return Response({
+        "status": "processing",
+        "upload_id": upload_log.pk,
+        "file_name": file_name,
+        "message": "File accepted. Processing in background."
+    }, status=status.HTTP_202_ACCEPTED)
+
+
+def _process_upload_in_background(file_content, file_name, upload_log_id, user_id, is_refresh):
+    """Background thread: process uploaded file and update UploadLog."""
+    import django
+    django.setup()  # Ensure Django is initialized in this thread
+
+    from django.contrib.auth.models import User
+    import gc
 
     try:
-        clean_df, errors, dup_count = process_file(uploaded_file, file_name)
-        
-        # Cross-file duplicate detection
-        incoming_ids = set(clean_df["shipment_id"].tolist())
-        existing_count = Shipment.objects.filter(user=user, shipment_id__in=incoming_ids).count()
-        
-        if existing_count > 0 and not is_refresh:
-            upload_log.status = UploadLog.Status.FAILED
-            upload_log.error_log = json.dumps({"fatal": "Duplicate records detected in system."})
-            upload_log.save()
-            return {
-                "file_name": file_name,
-                "error": "DUPLICATES_FOUND",
-                "duplicate_count": existing_count,
-                "message": "This file contains shipments that already exist in your dashboard. Would you like to Start Refresh?"
-            }
+        upload_log = UploadLog.objects.get(pk=upload_log_id)
+        user = User.objects.get(pk=user_id)
+    except (UploadLog.DoesNotExist, User.DoesNotExist):
+        logger.error(f"Background: upload_log={upload_log_id} or user={user_id} not found")
+        return
 
+    start_time = time.time()
+    try:
+        logger.info(f"Background processing: {file_name} ({len(file_content)} bytes)")
+        clean_df, errors, dup_count = process_file(BytesIO(file_content), file_name)
+
+        # Free the raw file content from memory
+        del file_content
+        gc.collect()
+
+        logger.info(f"Background: cleaning done, {len(clean_df)} clean rows. Starting bulk insert...")
         _bulk_insert_shipments(clean_df, upload_log, user)
+        logger.info(f"Background: bulk insert done for {file_name}")
 
         elapsed_ms = int((time.time() - start_time) * 1000)
         upload_log.total_rows = len(clean_df) + len(errors) + dup_count
@@ -246,20 +256,7 @@ def _process_single_file(uploaded_file, request):
         upload_log.data_quality_score = quality["data_quality_score"]
         upload_log.quality_issues = json.dumps(quality["issues"])
         upload_log.save()
-
-        return {
-            "message": "File processed successfully",
-            "upload_id": upload_log.id,
-            "file_name": file_name,
-            "total_rows": upload_log.total_rows,
-            "processed_rows": upload_log.processed_rows,
-            "error_rows": upload_log.error_rows,
-            "duplicates_removed": dup_count,
-            "processing_time": f"{elapsed_ms}ms",
-            "status": upload_log.status,
-            "data_quality_score": quality["data_quality_score"],
-            "quality_issues": quality["issues"],
-        }
+        logger.info(f"Background: DONE {file_name} in {elapsed_ms}ms, quality={quality['data_quality_score']}")
 
     except DataCleaningError as e:
         elapsed_ms = int((time.time() - start_time) * 1000)
@@ -267,15 +264,46 @@ def _process_single_file(uploaded_file, request):
         upload_log.error_log = json.dumps({"fatal": str(e)})
         upload_log.processing_time_ms = elapsed_ms
         upload_log.save()
-        return {"file_name": file_name, "error": "Cleaning failed", "details": str(e)}
+        logger.error(f"Background: cleaning failed for {file_name}: {e}")
     except Exception as e:
         elapsed_ms = int((time.time() - start_time) * 1000)
         upload_log.status = UploadLog.Status.FAILED
         upload_log.error_log = json.dumps({"fatal": str(e)})
         upload_log.processing_time_ms = elapsed_ms
         upload_log.save()
-        logger.exception(f"Unexpected error processing {file_name}")
-        return {"file_name": file_name, "error": "Unexpected error", "details": str(e)}
+        logger.exception(f"Background: unexpected error for {file_name}")
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def upload_status(request, upload_id):
+    """GET /api/uploads/<id>/status/ — Poll upload processing status."""
+    try:
+        upload_log = UploadLog.objects.get(pk=upload_id, user=request.user)
+    except UploadLog.DoesNotExist:
+        return Response({"error": "Upload not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    result = {
+        "upload_id": upload_log.pk,
+        "file_name": upload_log.file_name,
+        "status": upload_log.status,
+        "total_rows": upload_log.total_rows,
+        "processed_rows": upload_log.processed_rows,
+        "error_rows": upload_log.error_rows,
+        "duplicate_rows": upload_log.duplicate_rows,
+        "data_quality_score": upload_log.data_quality_score,
+        "processing_time_ms": upload_log.processing_time_ms,
+    }
+
+    if upload_log.status in (UploadLog.Status.COMPLETED, UploadLog.Status.PARTIAL):
+        result["message"] = "File processed successfully"
+    elif upload_log.status == UploadLog.Status.FAILED:
+        try:
+            result["error_details"] = json.loads(upload_log.error_log)
+        except Exception:
+            result["error_details"] = upload_log.error_log
+
+    return Response(result)
 
 
 @api_view(["DELETE"])
