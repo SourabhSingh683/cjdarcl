@@ -246,8 +246,8 @@ def clean_data(df, mapped, extra_mapped):
 
     # --- Text standardization ---
     for col in ["origin", "destination"]:
-        df[col] = df[col].astype(str).str.strip().str.title()
-        df.loc[df[col].isin(["Nan", "None", ""]), col] = "Unknown"
+        df[col] = df[col].astype(str).str.strip().str.upper()
+        df.loc[df[col].isin(["Nan", "None", ""]), col] = "UNKNOWN"
 
     df["vehicle_type"] = df["vehicle_type"].astype(str).str.strip().str.lower()
     df.loc[df["vehicle_type"].isin(["", "nan", "none"]), "vehicle_type"] = "other"

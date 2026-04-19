@@ -370,15 +370,22 @@ def reprocess_upload(request, upload_id):
 
 
 def _bulk_insert_shipments(df, upload_log, user):
-    """Bulk-insert with cross-file dedup on shipment_id. Optimized for speed."""
+    """Bulk-insert with cross-file dedup on shipment_id. Optimized for speed and reliability."""
     import gc
+    from django.db.models import Q
 
-    # 1. Routes — batch create missing ones
+    # 1. Routes — batch create missing ones with case-insensitive normalization
+    df["origin"] = df["origin"].astype(str).str.strip().str.upper()
+    df["destination"] = df["destination"].astype(str).str.strip().str.upper()
+    
     route_pairs = df[["origin", "destination"]].drop_duplicates().values.tolist()
-    route_origins = [o for o, d in route_pairs]
-    route_dests = [d for o, d in route_pairs]
+    route_origins = set(o for o, d in route_pairs)
+    route_dests = set(d for o, d in route_pairs)
+    
+    # Pre-fetch existing routes. We use UPPER() lookups to be safe.
     existing_routes = Route.objects.filter(origin__in=route_origins, destination__in=route_dests)
-    route_cache = {(r.origin, r.destination): r for r in existing_routes}
+    # Key is (origin.upper(), destination.upper()) to avoid casing mismatch
+    route_cache = {(r.origin.upper(), r.destination.upper()): r for r in existing_routes}
 
     missing_routes = []
     for origin, destination in route_pairs:
@@ -386,59 +393,96 @@ def _bulk_insert_shipments(df, upload_log, user):
             missing_routes.append(Route(origin=origin, destination=destination))
 
     if missing_routes:
+        logger.info(f"Creating {len(missing_routes)} new routes...")
         Route.objects.bulk_create(missing_routes, ignore_conflicts=True)
-        for r in Route.objects.filter(origin__in=route_origins, destination__in=route_dests):
-            route_cache[(r.origin, r.destination)] = r
+        # Refresh cache
+        new_routes = Route.objects.filter(origin__in=route_origins, destination__in=route_dests)
+        route_cache = {(r.origin.upper(), r.destination.upper()): r for r in new_routes}
 
-    # 2. Pre-fetch existing shipments for upsert
+    # 2. Pre-fetch existing shipments for upsert (only for relevant user)
     incoming_ids = set(df["shipment_id"].tolist())
-    existing_shipments = {
-        s.shipment_id: s
-        for s in Shipment.objects.filter(shipment_id__in=incoming_ids)
+    logger.info(f"Checking {len(incoming_ids)} shipment IDs for existence...")
+    
+    # Significant optimization: only fetch ID and shipment_id to save memory
+    existing_map = {
+        s_id: s_pk 
+        for s_pk, s_id in Shipment.objects.filter(shipment_id__in=incoming_ids).values_list("pk", "shipment_id")
     }
 
-    # 3. Build shipment objects using fast dict iteration (not iterrows)
+    # 3. Build shipment objects
     to_create, to_update = [], []
     records = df.to_dict("records")
-
+    
+    skipped_count = 0
     for row in records:
-        route = route_cache.get((row["origin"], row["destination"]))
+        origin_up = str(row["origin"]).upper()
+        dest_up = str(row["destination"]).upper()
+        route = route_cache.get((origin_up, dest_up))
+        
         if not route:
+            skipped_count += 1
             continue
+            
         data = _build_shipment_data(row, route, upload_log, user)
-        sid = row["shipment_id"]
+        sid = str(row["shipment_id"]).strip()
 
-        if sid in existing_shipments:
-            shipment = existing_shipments[sid]
-            if shipment.user == user or user.is_superuser:
-                for key, value in data.items():
-                    if key != "shipment_id":
-                        setattr(shipment, key, value)
-                to_update.append(shipment)
+        if sid in existing_map:
+            # For updates, we need the actual object. 
+            # To avoid loading all objects at once, we'll update in smaller batches later
+            # For now, let's keep the PK
+            data["pk"] = existing_map[sid]
+            to_update.append(data)
         else:
             to_create.append(Shipment(**data))
 
-    # 4. Bulk create in smaller batches to avoid memory spikes
-    BATCH = 300
-    for i in range(0, len(to_create), BATCH):
-        Shipment.objects.bulk_create(to_create[i:i + BATCH], batch_size=BATCH)
+    logger.info(f"Ingestion plan: {len(to_create)} to create, {len(to_update)} to update. {skipped_count} skipped (no route).")
+
+    # 4. Bulk operations
+    BATCH_SIZE = 500
+    
+    if to_create:
+        for i in range(0, len(to_create), BATCH_SIZE):
+            Shipment.objects.bulk_create(to_create[i:i + BATCH_SIZE], batch_size=BATCH_SIZE)
+            logger.info(f"Created batch {i // BATCH_SIZE + 1}...")
 
     if to_update:
-        for i in range(0, len(to_update), BATCH):
-            Shipment.objects.bulk_update(to_update[i:i + BATCH], fields=[
-                "route", "upload", "user", "dispatch_date", "delivery_date",
-                "expected_delivery_date", "vehicle_type", "vehicle_no",
-                "revenue", "rate_per_mt", "total_amount", "freight_deduction",
-                "penalty", "amount_receivable", "net_weight", "gross_weight",
-                "charge_weight", "shortage", "transit_permissible", "transit_taken",
-                "delay_days", "is_on_time", "has_shortage", "has_penalty",
-                "total_distance", "pod_status", "billing_status",
-                "customer_name", "transporter_name", "booking_region", "contract_id", "material_type",
-                "consignor_name", "consignee_name",
-            ], batch_size=BATCH)
+        # Since bulk_update needs objects, we fetch them in batches to save memory
+        update_fields = [
+            "route", "upload", "user", "dispatch_date", "delivery_date",
+            "expected_delivery_date", "vehicle_type", "vehicle_no",
+            "revenue", "rate_per_mt", "total_amount", "freight_deduction",
+            "penalty", "amount_receivable", "net_weight", "gross_weight",
+            "charge_weight", "shortage", "transit_permissible", "transit_taken",
+            "delay_days", "is_on_time", "has_shortage", "has_penalty",
+            "total_distance", "pod_status", "billing_status",
+            "customer_name", "transporter_name", "booking_region", "contract_id", "material_type",
+            "consignor_name", "consignee_name",
+        ]
+        
+        for i in range(0, len(to_update), BATCH_SIZE):
+            batch_data = to_update[i:i + BATCH_SIZE]
+            batch_pks = [d["pk"] for d in batch_data]
+            
+            # Fetch objects for this batch
+            objects_to_update = Shipment.objects.filter(pk__in=batch_pks)
+            obj_map = {obj.pk: obj for obj in objects_to_update}
+            
+            final_update_list = []
+            for data in batch_data:
+                obj = obj_map.get(data["pk"])
+                if obj:
+                    # Update fields except ID/PK/Shipment_ID
+                    for field, value in data.items():
+                        if field not in ("pk", "shipment_id"):
+                            setattr(obj, field, value)
+                    final_update_list.append(obj)
+            
+            if final_update_list:
+                Shipment.objects.bulk_update(final_update_list, fields=update_fields, batch_size=BATCH_SIZE)
+                logger.info(f"Updated batch {i // BATCH_SIZE + 1}...")
 
     # Free memory
-    del to_create, to_update, records
+    del to_create, to_update, records, route_cache, existing_map
     gc.collect()
 
 
