@@ -112,36 +112,27 @@ def process_profit_file(uploaded_file, file_name: str) -> Tuple[pd.DataFrame, Li
     errors = []
     clean_rows = []
 
-    # Iterate using itertuples for better performance/memory than iterrows
-    for row in df.itertuples(index=True):
+    # Use iterrows to preserve original column names (itertuples mangles names with spaces)
+    for idx, row in df.iterrows():
         try:
             record = {}
             # Map standard columns
             for excel_col, model_field in COLUMN_MAP.items():
-                val = getattr(row, excel_col, None) if hasattr(row, excel_col) else None
-                if pd.isna(val):
+                val = row.get(excel_col)
+                if val is not None and pd.isna(val):
                     val = None
                 record[model_field] = val
 
-            # Handle "Own Fleet Frt Other Exp" (getattr handles spaces if needed, but itertuples mangles names)
-            # Revert to dict access or safer getattr for messy headers
-            row_dict = row._asdict()
-            
-            # Map standard columns again more safely from dict
-            for excel_col, model_field in COLUMN_MAP.items():
-                val = row_dict.get(excel_col)
-                if pd.isna(val): val = None
-                record[model_field] = val
+            # Handle special columns
+            own_fleet_val = row.get(OWN_FLEET_COL, 0)
+            record["own_fleet_exp"] = 0 if (own_fleet_val is None or pd.isna(own_fleet_val)) else own_fleet_val
 
-            own_fleet_val = row_dict.get(OWN_FLEET_COL, 0)
-            record["own_fleet_exp"] = 0 if pd.isna(own_fleet_val) else own_fleet_val
-
-            reimb_val = row_dict.get(REIMB_COL, 0)
-            record["reimb_exp"] = 0 if pd.isna(reimb_val) else reimb_val
+            reimb_val = row.get(REIMB_COL, 0)
+            record["reimb_exp"] = 0 if (reimb_val is None or pd.isna(reimb_val)) else reimb_val
 
             # Validate required fields
             if not record.get("sap_delivery_no"):
-                errors.append({"row": row.Index + 3, "error": "Missing SAP Delivery No"})
+                errors.append({"row": idx + 3, "error": "Missing SAP Delivery No"})
                 continue
 
             # Convert dates
@@ -187,7 +178,7 @@ def process_profit_file(uploaded_file, file_name: str) -> Tuple[pd.DataFrame, Li
 
             clean_rows.append(record)
         except Exception as e:
-            errors.append({"row": row.Index + 3, "error": str(e)})
+            errors.append({"row": idx + 3, "error": str(e)})
 
     # Clear raw dataframe from memory immediately
     del df

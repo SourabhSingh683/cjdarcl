@@ -131,6 +131,7 @@ export function uploadFileWithProgress(files, refresh = false, onProgress = () =
     const token = localStorage.getItem('access_token');
     
     xhr.open('POST', `${API_BASE}/upload/${query}`);
+    xhr.timeout = 180000; // 3 minutes for server-side processing
     if (token) {
       xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     }
@@ -160,6 +161,7 @@ export function uploadFileWithProgress(files, refresh = false, onProgress = () =
     };
 
     xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.ontimeout = () => reject(new Error('Server took too long to process the file. Please try again or upload a smaller file.'));
     xhr.send(formData);
   });
 }
@@ -219,6 +221,7 @@ export function uploadProfitFile(files, refresh = false, onProgress = () => {}) 
     const token = localStorage.getItem('access_token');
     
     xhr.open('POST', `${API_BASE}/profit/upload/${query}`);
+    xhr.timeout = 180000; // 3 minutes for server-side processing
     if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
 
     xhr.upload.onprogress = (event) => {
@@ -237,6 +240,7 @@ export function uploadProfitFile(files, refresh = false, onProgress = () => {}) 
     };
 
     xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.ontimeout = () => reject(new Error('Server took too long to process the file. Please try again or upload a smaller file.'));
     xhr.send(formData);
   });
 }

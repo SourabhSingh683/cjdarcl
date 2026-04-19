@@ -1103,11 +1103,11 @@ function UploadView({ onUploadDone, onProfitUploadDone }) {
         )}
 
         <div className="upload-icon">{uploading ? '⏳' : uploadType === 'profit' ? '💰' : '📁'}</div>
-        <div className="upload-title">{uploading ? (uploadProgress < 100 ? `Uploading... ${uploadProgress}%` : 'Finalizing processing...') : `Drop your ${uploadType === 'profit' ? 'Gross Margin MIS' : 'Billing'} file(s) here`}</div>
-        <div className="upload-subtitle">Supports .xlsx, .xls, .csv files (max 10MB each)</div>
+        <div className="upload-title">{uploading ? (uploadProgress < 100 ? `Uploading... ${uploadProgress}%` : 'Server is processing your data...') : `Drop your ${uploadType === 'profit' ? 'Gross Margin MIS' : 'Billing'} file(s) here`}</div>
+        <div className="upload-subtitle">{uploading && uploadProgress >= 100 ? 'This may take up to a minute for large files. Please do not close this page.' : 'Supports .xlsx, .xls, .csv files (max 10MB each)'}</div>
         {uploading && (
           <div className="progress-bar-container" style={{ width: '80%', height: '8px', background: 'rgba(59,130,246,0.1)', borderRadius: '99px', marginTop: '1.5rem', overflow: 'hidden' }}>
-            <div className="progress-bar-fill" style={{ width: `${uploadProgress}%`, height: '100%', background: uploadType === 'profit' ? 'linear-gradient(90deg, #10b981, #059669)' : 'linear-gradient(90deg, #3b82f6, #8b5cf6)', transition: 'width 0.3s ease-out' }} />
+            <div className="progress-bar-fill" style={{ width: uploadProgress >= 100 ? '100%' : `${uploadProgress}%`, height: '100%', background: uploadType === 'profit' ? 'linear-gradient(90deg, #10b981, #059669)' : 'linear-gradient(90deg, #3b82f6, #8b5cf6)', transition: 'width 0.3s ease-out', animation: uploadProgress >= 100 ? 'pulse 1.5s ease-in-out infinite' : 'none' }} />
           </div>
         )}
         <input id="file-input" className="upload-input" type="file" accept=".xlsx,.xls,.csv" multiple onChange={e => handleFiles(e.target.files)} />
