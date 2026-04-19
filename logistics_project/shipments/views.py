@@ -491,7 +491,11 @@ def _build_shipment_data(row, route, upload_log, user):
     import math
 
     def _is_na(val):
-        if val is None:
+        """Robust check for None, NaN, NaT, and empty strings."""
+        if val is None or val == "":
+            return True
+        # Check for pandas NaT/NaN without a hard top-level import
+        if hasattr(val, "__class__") and val.__class__.__name__ in ("NaTType", "NAType"):
             return True
         try:
             return math.isnan(val)
@@ -501,7 +505,16 @@ def _build_shipment_data(row, route, upload_log, user):
     def _safe_date(val):
         if _is_na(val):
             return None
-        return val.date() if hasattr(val, "date") else val
+        if hasattr(val, "date"):
+            # Handle pd.Timestamp and datetime objects
+            try:
+                d = val.date()
+                if hasattr(d, "__class__") and d.__class__.__name__ == "NaTType":
+                    return None
+                return d
+            except Exception:
+                return None
+        return val
 
     def _safe_float(val, default=0):
         if _is_na(val):
