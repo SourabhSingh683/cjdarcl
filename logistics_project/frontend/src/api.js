@@ -120,7 +120,7 @@ export async function uploadFile(files, refresh = false) {
  */
 export async function pollUploadStatus(uploadId, onProgress = () => {}, intervalMs = 3000, maxAttempts = 60) {
   for (let i = 0; i < maxAttempts; i++) {
-    const res = await apiFetch(`/uploads/${uploadId}/status/`);
+    const res = await apiFetch(`/uploads/${uploadId}/status/`, {}, true);
     const s = res.status;
     
     // Update progress for UI
